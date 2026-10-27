@@ -36,9 +36,16 @@ library.textSecondary = Color3.fromRGB(198, 198, 204)
 library.textMuted     = Color3.fromRGB(128, 128, 136)
 library.title         = "DROIDWARE"
 library.version       = ""
-library.font          = Enum.Font.Gotham
-library.fontBold      = Enum.Font.GothamBold
-library.fontMed       = Enum.Font.GothamMedium
+local function pickFont(names, fallback)
+    for _, n in ipairs(names) do
+        local ok, f = pcall(function() return Enum.Font[n] end)
+        if ok and f then return f end
+    end
+    return fallback
+end
+library.font     = pickFont({ "BuilderSans", "Montserrat", "Gotham" }, Enum.Font.Gotham)
+library.fontMed  = pickFont({ "BuilderSansMedium", "GothamMedium" }, Enum.Font.GothamMedium)
+library.fontBold = pickFont({ "BuilderSansBold", "MontserratBold", "GothamBold" }, Enum.Font.GothamBold)
 
 -- ---------- metrics ----------
 library.windowWidth  = 980
@@ -386,9 +393,24 @@ function library:BuildFrame(parent, w, h)
     }, bg)
 
     sheen(bg,
-        Color3.fromRGB(23, 20, 26),
-        Color3.fromRGB(15, 14, 17),
-        Color3.fromRGB(11, 10, 13))
+        Color3.fromRGB(34, 28, 38),
+        Color3.fromRGB(17, 15, 20),
+        Color3.fromRGB(9, 9, 12))
+
+    -- a second, angled wash: two gradients crossing is what stops a
+    -- large flat area from looking printed
+    local wash = new("Frame", {
+        Name = "bgWash", BackgroundColor3 = Color3.fromRGB(52, 34, 46),
+        BorderSizePixel = 0, Size = UDim2.new(1, 0, 1, 0), ZIndex = 0,
+    }, bg)
+    new("UIGradient", {
+        Rotation = 28,
+        Transparency = NumberSequence.new{
+            NumberSequenceKeypoint.new(0.00, 0.80),
+            NumberSequenceKeypoint.new(0.45, 0.93),
+            NumberSequenceKeypoint.new(1.00, 1.00),
+        },
+    }, wash)
 
     -- the OG's two ambient washes, rebuilt as gradients
     bloom(bg, self.accentColor, 0.87,
@@ -1318,10 +1340,89 @@ function library:Init(toggleKey)
         Color3.fromRGB(22, 20, 25),
         Color3.fromRGB(18, 17, 21))
 
+    -- profile card, pinned to the bottom of the sidebar
+    local CARD_H = 58
+    local card = new("Frame", {
+        Name = "profileCard",
+        AnchorPoint = Vector2.new(0.5, 1),
+        Position = UDim2.new(0.5, 0, 1, -8),
+        Size = UDim2.new(1, -16, 0, CARD_H),
+        BackgroundColor3 = self.surfaceColor,
+        BorderSizePixel = 0, ZIndex = 7,
+    }, nav)
+    corner(card, RADIUS)
+    new("UIStroke", {
+        Color = self.strokeColor, Transparency = 0.45, Thickness = 1,
+        ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
+    }, card)
+    sheen(card,
+        Color3.fromRGB(38, 31, 42),
+        Color3.fromRGB(27, 24, 30),
+        Color3.fromRGB(21, 19, 24))
+
+    local avRing = new("Frame", {
+        Name = "avatarRing",
+        Position = UDim2.fromOffset(8, (CARD_H - 40) / 2),
+        Size = UDim2.fromOffset(40, 40),
+        BackgroundColor3 = self.accentColor,
+        BackgroundTransparency = 0.75,
+        BorderSizePixel = 0, ZIndex = 8,
+    }, card)
+    corner(avRing, 99)
+
+    local avatar = new("ImageLabel", {
+        Name = "avatar",
+        AnchorPoint = Vector2.new(0.5, 0.5),
+        Position = UDim2.new(0.5, 0, 0.5, 0),
+        Size = UDim2.fromOffset(36, 36),
+        BackgroundColor3 = self.bgColor,
+        BorderSizePixel = 0, ZIndex = 9,
+    }, avRing)
+    corner(avatar, 99)
+
+    local nameLbl = new("TextLabel", {
+        Name = "profileName", BackgroundTransparency = 1,
+        Position = UDim2.fromOffset(56, 11),
+        Size = UDim2.new(1, -64, 0, 15),
+        Font = self.fontBold, TextSize = 12,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        TextColor3 = self.textColor,
+        TextTruncate = Enum.TextTruncate.AtEnd,
+        Text = LP.DisplayName or LP.Name, ZIndex = 9,
+    }, card)
+
+    local userLbl = new("TextLabel", {
+        Name = "profileUser", BackgroundTransparency = 1,
+        Position = UDim2.fromOffset(56, 27),
+        Size = UDim2.new(1, -64, 0, 13),
+        Font = self.font, TextSize = 11,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        TextColor3 = self.textMuted,
+        TextTruncate = Enum.TextTruncate.AtEnd,
+        Text = "@" .. LP.Name, ZIndex = 9,
+    }, card)
+
+    -- headshot is fetched async; the ring stands in until it lands
+    task.spawn(function()
+        local ok, id = pcall(function()
+            return Players:GetUserThumbnailAsync(LP.UserId,
+                Enum.ThumbnailType.HeadShot, Enum.ThumbnailSize.Size150x150)
+        end)
+        if ok and id and avatar.Parent then
+            avatar.Image = id
+            avatar.BackgroundTransparency = 1
+        end
+    end)
+
+    self:OnTheme(function()
+        avRing.BackgroundColor3 = self.accentColor
+        nameLbl.TextColor3      = self.textColor
+    end)
+
     local navScroll = new("ScrollingFrame", {
         Name = "navScroll", BackgroundTransparency = 1, BorderSizePixel = 0,
         Position = UDim2.fromOffset(8, 8),
-        Size = UDim2.new(1, -16, 1, -16),
+        Size = UDim2.new(1, -16, 1, -(16 + CARD_H + 8)),
         ScrollBarThickness = 2,
         ScrollBarImageColor3 = self.accentColor,
         CanvasSize = UDim2.new(), ZIndex = 6,
