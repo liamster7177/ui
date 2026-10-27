@@ -1380,6 +1380,76 @@ local function newGroupbox(column, title)
     list(body, 5)
     padding(body, 9, 9, 0, 9)
 
+    -- Collapse / expand. Sections start closed so a tab opens as a short
+    -- list of headings rather than a wall of controls.
+    if title and title ~= "" then
+        local open = false
+
+        local sign = new("TextButton", {
+            Name = "gbToggle",
+            AnchorPoint = Vector2.new(1, 0),
+            Position = UDim2.new(1, -8, 0, 3),
+            Size = UDim2.fromOffset(16, 16),
+            BackgroundColor3 = library.inputColor,
+            BorderSizePixel = 0, AutoButtonColor = false,
+            Font = library.fontBold, TextSize = 13,
+            TextColor3 = library.accentColor,
+            Text = "+", ZIndex = 9,
+        }, frame)
+        corner(sign, 3)
+        local signStroke = new("UIStroke", {
+            Color = library.strokeColor, Transparency = 0.4, Thickness = 1,
+            ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
+        }, sign)
+
+        -- a full-width invisible button over the heading, so the whole
+        -- title row toggles rather than just the little square
+        local headHit = new("TextButton", {
+            Name = "gbHeadHit",
+            Position = UDim2.fromOffset(0, 0),
+            Size = UDim2.new(1, 0, 0, 22),
+            BackgroundTransparency = 1, Text = "", AutoButtonColor = false,
+            ZIndex = 8,
+        }, frame)
+
+        local function apply(animate)
+            body.Visible = open
+            sign.Text    = open and "-" or "+"
+            if open then
+                body.AutomaticSize = Enum.AutomaticSize.Y
+                frame.AutomaticSize = Enum.AutomaticSize.Y
+            else
+                frame.AutomaticSize = Enum.AutomaticSize.None
+                frame.Size = UDim2.new(1, 0, 0, 28)
+            end
+            local t = animate and 0.1 or 0
+            tween(sign, t, {
+                BackgroundColor3 = open and library.accentSoft or library.inputColor,
+            })
+        end
+        apply(false)
+
+        local function flip()
+            open = not open
+            apply(true)
+        end
+        sign.MouseButton1Click:Connect(flip)
+        headHit.MouseButton1Click:Connect(flip)
+        headHit.MouseEnter:Connect(function()
+            tween(signStroke, 0.1, { Transparency = 0 })
+        end)
+        headHit.MouseLeave:Connect(function()
+            tween(signStroke, 0.14, { Transparency = 0.4 })
+        end)
+
+        gb._setOpen = function(_, v) open = v and true or false apply(true) end
+        gb._isOpen  = function() return open end
+        library:OnTheme(function()
+            sign.TextColor3 = library.accentColor
+            apply(false)
+        end)
+    end
+
     gb._frame, gb._body = frame, body
     library:OnTheme(function()
         gbStroke.Color = library.strokeColor
@@ -1703,6 +1773,8 @@ function library:Init(toggleKey)
             local col  = tab._columns[((tab._next - 1) % cols) + 1]
             local gb   = newGroupbox(col, title2)
             tab._boxes[#tab._boxes + 1] = gb._frame
+            tab._boxObjs = tab._boxObjs or {}
+            tab._boxObjs[#tab._boxObjs + 1] = gb
             return gb
         end
         function Components:AddLeftGroupbox(t)  return addBox(t) end
@@ -1710,6 +1782,17 @@ function library:Init(toggleKey)
         function Components:AddRightGroupbox(t) return addBox(t) end
         Components.AddGroupbox = Components.AddLeftGroupbox
         function Components:NewSection(t)       return addBox(t) end
+        -- let a hub open or close everything at once
+        function Components:ExpandAll()
+            for _, g in ipairs(tab._boxObjs or {}) do
+                if g._setOpen then pcall(g._setOpen, g, true) end
+            end
+        end
+        function Components:CollapseAll()
+            for _, g in ipairs(tab._boxObjs or {}) do
+                if g._setOpen then pcall(g._setOpen, g, false) end
+            end
+        end
         Components._tab = tab
         return Components
     end
