@@ -1,4 +1,4 @@
-\-- ===========================================================
+-- ===========================================================
 -- DROIDWARE UI
 -- Linoria-flavoured: flat, dense, 1px outlines, square-ish.
 -- Drop-in for the call surface the DROIDWARE hub uses.
@@ -199,7 +199,7 @@ function library:SetAccentColor(c)
     self.accentColor = c
     local h, s, v = c:ToHSV()
     self.accentSoft = Color3.fromHSV(h, math.min(1, s * 1.02), math.max(0, v * 0.5))
-    for _, fn in ipairs(self._themeHooks) do pcall(fn) end
+    for _, fn in ipairs(self._themeHooks or {}) do pcall(fn) end
     return self
 end
 function library:OnTheme(fn) self._themeHooks[#self._themeHooks + 1] = fn end
@@ -1945,9 +1945,6 @@ function library:AddWindowResizeEdges() return true end   -- built in already
 function library:LucideForTab() return "circle" end
 function library:Watermark() end
 function library:ImageWatermark() end
-function library:ApplyTheme()
-    for _, fn in ipairs(self._themeHooks or {}) do pcall(fn) end
-end
 
 function library:CleanCharacterClone(model)
     for _, d in ipairs(model:GetDescendants()) do
@@ -2025,6 +2022,5 @@ end
 function library:RegisterFlag(name, get, set) self._flags[name] = { get = get, set = set } end
 function library:AddSoftGlow() end
 function library:AddNoise() end
-function library:LoadIcon() return nil end
 
 return library
