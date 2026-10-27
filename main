@@ -435,20 +435,45 @@ function library:BuildFrame(parent, w, h)
         ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
     }, bg)
 
-    -- black at the top falling into the accent at the bottom. Built from
-    -- the accent itself, so changing it re-tints the whole window.
-    local bgGrad = new("UIGradient", { Name = "bgGradient", Rotation = 90 }, bg)
-    local function paintBg()
-        local a = self.accentColor
-        bgGrad.Color = ColorSequence.new{
-            ColorSequenceKeypoint.new(0.00, Color3.fromRGB(10, 9, 11)),
-            ColorSequenceKeypoint.new(0.42, a:Lerp(Color3.new(0, 0, 0), 0.86)),
-            ColorSequenceKeypoint.new(0.78, a:Lerp(Color3.new(0, 0, 0), 0.68)),
-            ColorSequenceKeypoint.new(1.00, a:Lerp(Color3.new(0, 0, 0), 0.52)),
-        }
+    -- The window stays near-black. Colour comes from two soft corner
+    -- blooms instead of a full ramp -- a wall-to-wall black->red gradient
+    -- reads cheap, a dark panel with light bleeding into two corners does
+    -- not. Both are built from the accent, so retinting is one setting.
+    local bgGrad = new("UIGradient", { Name = "bgGradient", Rotation = 92 }, bg)
+    bgGrad.Color = ColorSequence.new{
+        ColorSequenceKeypoint.new(0.00, Color3.fromRGB(26, 23, 27)),
+        ColorSequenceKeypoint.new(0.50, Color3.fromRGB(16, 15, 18)),
+        ColorSequenceKeypoint.new(1.00, Color3.fromRGB(11, 10, 12)),
+    }
+
+    local function cornerBloom(anchor, pos, size, rot, strength)
+        local g = new("Frame", {
+            Name = "cornerBloom",
+            AnchorPoint = anchor, Position = pos, Size = size,
+            BackgroundColor3 = self.accentColor,
+            BorderSizePixel = 0, ZIndex = 1,
+        }, bg)
+        new("UIGradient", {
+            Rotation = rot,
+            Transparency = NumberSequence.new{
+                NumberSequenceKeypoint.new(0.00, strength),
+                NumberSequenceKeypoint.new(0.45, strength + (1 - strength) * 0.6),
+                NumberSequenceKeypoint.new(1.00, 1),
+            },
+        }, g)
+        return g
     end
-    paintBg()
-    self:OnTheme(paintBg)
+
+    -- top-left wash and a weaker one bottom-right
+    local bloomA = cornerBloom(Vector2.new(0, 0), UDim2.new(0, 0, 0, 0),
+        UDim2.new(0.75, 0, 0.55, 0), 125, 0.80)
+    local bloomB = cornerBloom(Vector2.new(1, 1), UDim2.new(1, 0, 1, 0),
+        UDim2.new(0.6, 0, 0.5, 0), 305, 0.88)
+
+    self:OnTheme(function()
+        bloomA.BackgroundColor3 = self.accentColor
+        bloomB.BackgroundColor3 = self.accentColor
+    end)
 
     -- the OG's two ambient washes, rebuilt as gradients
     bloom(bg, self.accentColor, 0.87,
@@ -476,8 +501,9 @@ function library:BuildHeader(bg, titleText, height)
     local function paintHeader()
         local a = self.accentColor
         hdrGrad.Color = ColorSequence.new{
-            ColorSequenceKeypoint.new(0.00, a:Lerp(Color3.new(0, 0, 0), 0.62)),
-            ColorSequenceKeypoint.new(1.00, Color3.fromRGB(14, 12, 15)),
+            ColorSequenceKeypoint.new(0.00, a:Lerp(Color3.fromRGB(26, 23, 27), 0.80)),
+            ColorSequenceKeypoint.new(0.65, Color3.fromRGB(22, 20, 24)),
+            ColorSequenceKeypoint.new(1.00, Color3.fromRGB(15, 14, 17)),
         }
     end
     paintHeader()
