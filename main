@@ -30,7 +30,7 @@ library.edgeColor     = Color3.fromRGB(28, 23, 30)
 library.surfaceColor  = Color3.fromRGB(24, 22, 27)
 library.inputColor    = Color3.fromRGB(33, 30, 36)
 library.strokeColor   = Color3.fromRGB(62, 56, 68)
-library.icon          = ""   -- set to an image id or URL for the header
+library.icon          = "https://raw.githubusercontent.com/liamster7177/ui/main/IMG_1522%202.PNG"
 library.textColor     = Color3.fromRGB(235, 235, 238)
 library.textSecondary = Color3.fromRGB(198, 198, 204)
 library.textMuted     = Color3.fromRGB(128, 128, 136)
@@ -435,25 +435,20 @@ function library:BuildFrame(parent, w, h)
         ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
     }, bg)
 
-    sheen(bg,
-        Color3.fromRGB(34, 28, 38),
-        Color3.fromRGB(17, 15, 20),
-        Color3.fromRGB(9, 9, 12))
-
-    -- a second, angled wash: two gradients crossing is what stops a
-    -- large flat area from looking printed
-    local wash = new("Frame", {
-        Name = "bgWash", BackgroundColor3 = Color3.fromRGB(52, 34, 46),
-        BorderSizePixel = 0, Size = UDim2.new(1, 0, 1, 0), ZIndex = 0,
-    }, bg)
-    new("UIGradient", {
-        Rotation = 28,
-        Transparency = NumberSequence.new{
-            NumberSequenceKeypoint.new(0.00, 0.80),
-            NumberSequenceKeypoint.new(0.45, 0.93),
-            NumberSequenceKeypoint.new(1.00, 1.00),
-        },
-    }, wash)
+    -- black at the top falling into the accent at the bottom. Built from
+    -- the accent itself, so changing it re-tints the whole window.
+    local bgGrad = new("UIGradient", { Name = "bgGradient", Rotation = 90 }, bg)
+    local function paintBg()
+        local a = self.accentColor
+        bgGrad.Color = ColorSequence.new{
+            ColorSequenceKeypoint.new(0.00, Color3.fromRGB(10, 9, 11)),
+            ColorSequenceKeypoint.new(0.42, a:Lerp(Color3.new(0, 0, 0), 0.86)),
+            ColorSequenceKeypoint.new(0.78, a:Lerp(Color3.new(0, 0, 0), 0.68)),
+            ColorSequenceKeypoint.new(1.00, a:Lerp(Color3.new(0, 0, 0), 0.52)),
+        }
+    end
+    paintBg()
+    self:OnTheme(paintBg)
 
     -- the OG's two ambient washes, rebuilt as gradients
     bloom(bg, self.accentColor, 0.87,
@@ -477,10 +472,16 @@ function library:BuildHeader(bg, titleText, height)
         BackgroundTransparency = 0.5,
         BorderSizePixel = 0, ZIndex = 5,
     }, bg)
-    sheen(header,
-        Color3.fromRGB(32, 28, 36),
-        Color3.fromRGB(24, 21, 27),
-        Color3.fromRGB(19, 17, 21))
+    local hdrGrad = new("UIGradient", { Rotation = 90 }, header)
+    local function paintHeader()
+        local a = self.accentColor
+        hdrGrad.Color = ColorSequence.new{
+            ColorSequenceKeypoint.new(0.00, a:Lerp(Color3.new(0, 0, 0), 0.62)),
+            ColorSequenceKeypoint.new(1.00, Color3.fromRGB(14, 12, 15)),
+        }
+    end
+    paintHeader()
+    self:OnTheme(paintHeader)
 
     local iconSize = math.min(height - 12, 24)
     local iconGlow = new("Frame", {
@@ -834,7 +835,12 @@ function Groupbox:NewSelector(text, default, options, callback)
     padding(menu, 3, 3, 3, 3)
 
     local F = {}
-    local function close() menu.Visible = false end
+    local backdrop
+    local function close()
+        menu.Visible = false
+        if backdrop then backdrop.Visible = false end
+        if library._openMenu == close then library._openMenu = nil end
+    end
     local function rebuild()
         for _, c in ipairs(menu:GetChildren()) do
             if c:IsA("TextButton") then c:Destroy() end
@@ -880,22 +886,26 @@ function Groupbox:NewSelector(text, default, options, callback)
         local y = below
         if below + menuH > viewH - 8 and above >= 8 then y = above end
         menu.Position = UDim2.fromOffset(bp.X, y)
-        menu.Visible  = true
+        -- only one menu open at a time
+        if library._openMenu and library._openMenu ~= close then
+            pcall(library._openMenu)
+        end
+        library._openMenu = close
+        backdrop.Visible = true
+        menu.Visible     = true
     end)
-    library:HoldConn(row, UIS.InputBegan:Connect(function(i)
-        if i.UserInputType ~= Enum.UserInputType.MouseButton1 or not menu.Visible then return end
-        -- InputBegan beats the option button's own click, so decide a frame
-        -- later: otherwise the menu can close out from under the selection
-        task.defer(function()
-            if not menu.Visible then return end
-            local m = mouseAbs()
-            local p, sz  = menu.AbsolutePosition, menu.AbsoluteSize
-            local bp, bs = box.AbsolutePosition, box.AbsoluteSize
-            local inMenu = m.X >= p.X and m.X <= p.X + sz.X and m.Y >= p.Y and m.Y <= p.Y + sz.Y
-            local inBox  = m.X >= bp.X and m.X <= bp.X + bs.X and m.Y >= bp.Y and m.Y <= bp.Y + bs.Y
-            if not inMenu and not inBox then close() end
-        end)
-    end))
+    -- A transparent full-screen button sits UNDER the menu and above
+    -- everything else. Clicking off the menu hits it and closes; clicking
+    -- an option hits the option, because the menu is drawn above it.
+    -- No mouse coordinates involved, so no inset to get wrong.
+    backdrop = new("TextButton", {
+        Name = "selectorBackdrop",
+        BackgroundTransparency = 1,
+        Text = "", AutoButtonColor = false,
+        Size = UDim2.new(1, 0, 1, 0),
+        Visible = false, ZIndex = 199,
+    }, menuHome)
+    backdrop.MouseButton1Click:Connect(function() close() end)
 
     function F:SetOption(v)
         current = v
