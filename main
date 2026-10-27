@@ -1,4 +1,4 @@
--- ===========================================================
+\-- ===========================================================
 -- DROIDWARE UI
 -- Linoria-flavoured: flat, dense, 1px outlines, square-ish.
 -- Drop-in for the call surface the DROIDWARE hub uses.
@@ -435,51 +435,40 @@ function library:BuildFrame(parent, w, h)
         ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
     }, bg)
 
-    -- The window stays near-black. Colour comes from two soft corner
-    -- blooms instead of a full ramp -- a wall-to-wall black->red gradient
-    -- reads cheap, a dark panel with light bleeding into two corners does
-    -- not. Both are built from the accent, so retinting is one setting.
-    local bgGrad = new("UIGradient", { Name = "bgGradient", Rotation = 92 }, bg)
-    bgGrad.Color = ColorSequence.new{
-        ColorSequenceKeypoint.new(0.00, Color3.fromRGB(26, 23, 27)),
-        ColorSequenceKeypoint.new(0.50, Color3.fromRGB(16, 15, 18)),
-        ColorSequenceKeypoint.new(1.00, Color3.fromRGB(11, 10, 12)),
-    }
-
-    local function cornerBloom(anchor, pos, size, rot, strength)
-        local g = new("Frame", {
-            Name = "cornerBloom",
-            AnchorPoint = anchor, Position = pos, Size = size,
-            BackgroundColor3 = self.accentColor,
-            BorderSizePixel = 0, ZIndex = 1,
-        }, bg)
-        new("UIGradient", {
-            Rotation = rot,
-            Transparency = NumberSequence.new{
-                NumberSequenceKeypoint.new(0.00, strength),
-                NumberSequenceKeypoint.new(0.45, strength + (1 - strength) * 0.6),
-                NumberSequenceKeypoint.new(1.00, 1),
-            },
-        }, g)
-        return g
+    -- A real diagonal: deep red in the top-left corner driving down to
+    -- black in the bottom-right. One gradient does the work, so the
+    -- contrast is actually visible instead of two washes cancelling out.
+    local bgGrad = new("UIGradient", { Name = "bgGradient", Rotation = 34 }, bg)
+    local function paintBg()
+        local a = self.accentColor
+        bgGrad.Color = ColorSequence.new{
+            ColorSequenceKeypoint.new(0.00, a:Lerp(Color3.new(0, 0, 0), 0.60)),
+            ColorSequenceKeypoint.new(0.22, a:Lerp(Color3.new(0, 0, 0), 0.78)),
+            ColorSequenceKeypoint.new(0.52, Color3.fromRGB(22, 11, 13)),
+            ColorSequenceKeypoint.new(0.78, Color3.fromRGB(12, 9, 10)),
+            ColorSequenceKeypoint.new(1.00, Color3.fromRGB(6, 6, 7)),
+        }
     end
+    paintBg()
+    self:OnTheme(paintBg)
 
-    -- top-left wash and a weaker one bottom-right
-    local bloomA = cornerBloom(Vector2.new(0, 0), UDim2.new(0, 0, 0, 0),
-        UDim2.new(0.75, 0, 0.55, 0), 125, 0.80)
-    local bloomB = cornerBloom(Vector2.new(1, 1), UDim2.new(1, 0, 1, 0),
-        UDim2.new(0.6, 0, 0.5, 0), 305, 0.88)
-
-    self:OnTheme(function()
-        bloomA.BackgroundColor3 = self.accentColor
-        bloomB.BackgroundColor3 = self.accentColor
-    end)
-
-    -- the OG's two ambient washes, rebuilt as gradients
-    bloom(bg, self.accentColor, 0.87,
-        UDim2.new(0.62, 0, 0, 210), UDim2.new(0.10, 0, 0, -120), 90)
-    bloom(bg, Color3.fromRGB(96, 70, 150), 0.92,
-        UDim2.new(0.5, 0, 0, 190), UDim2.new(0.62, 0, 1, -130), 270)
+    -- a hard accent hairline down the left edge: cheap, and it reads as
+    -- deliberate rather than decorative
+    local spine = new("Frame", {
+        Name = "spine",
+        Size = UDim2.new(0, 2, 1, 0),
+        BackgroundColor3 = self.accentColor,
+        BorderSizePixel = 0, ZIndex = 4,
+    }, bg)
+    new("UIGradient", {
+        Rotation = 90,
+        Transparency = NumberSequence.new{
+            NumberSequenceKeypoint.new(0.00, 0.1),
+            NumberSequenceKeypoint.new(0.55, 0.6),
+            NumberSequenceKeypoint.new(1.00, 1.0),
+        },
+    }, spine)
+    self:OnTheme(function() spine.BackgroundColor3 = self.accentColor end)
 
     self:OnTheme(function()
         h1.Color, h2.Color, h3.Color = self.accentColor, self.accentColor, self.accentColor
@@ -1359,16 +1348,25 @@ local function newGroupbox(column, title)
     end)
 
     if title and title ~= "" then
+        local tick = new("Frame", {
+            Name = "gbTick",
+            Position = UDim2.fromOffset(10, 8),
+            Size = UDim2.fromOffset(2, 9),
+            BackgroundColor3 = library.accentColor,
+            BorderSizePixel = 0, ZIndex = 8,
+        }, frame)
+        corner(tick, 1)
         new("TextLabel", {
             Name = "gbTitle", BackgroundTransparency = 1,
-            Position = UDim2.fromOffset(9, 5),
-            Size = UDim2.new(1, -18, 0, 13),
+            Position = UDim2.fromOffset(18, 4),
+            Size = UDim2.new(1, -26, 0, 14),
             Font = library.fontBold, TextSize = 11,
-            TextColor3 = library.accentColor,
+            TextColor3 = library.textColor,
             TextXAlignment = Enum.TextXAlignment.Left,
             TextTruncate = Enum.TextTruncate.AtEnd,
             Text = string.upper(tostring(title)), ZIndex = 7,
         }, frame)
+        library:OnTheme(function() tick.BackgroundColor3 = library.accentColor end)
     end
 
     local body = new("Frame", {
@@ -1385,7 +1383,7 @@ local function newGroupbox(column, title)
         gbStroke.Color = library.strokeColor
         gbGlow.Color   = library.accentColor
         local t = frame:FindFirstChild("gbTitle")
-        if t then t.TextColor3 = library.accentColor end
+        if t then t.TextColor3 = library.textColor end
     end)
     return gb
 end
@@ -1663,14 +1661,13 @@ function library:Init(toggleKey)
                 else
                     t._page.Visible = on
                 end
-                tween(t._btn, 0.12, { BackgroundTransparency = on and 0.25 or 1 })
+                tween(t._btn, 0.14, { BackgroundTransparency = on and 0.86 or 1 })
                 tween(t._lbl, 0.12, { TextColor3 = on and library.textColor or library.textMuted })
                 t._dot.BackgroundColor3 = library.accentColor
-                tween(t._dot, 0.12, {
-                    BackgroundTransparency = on and 0 or 1,
-                    Size = UDim2.new(0, 2, 0, on and 1 or 0),
-                })
-                t._dot.Size = UDim2.new(0, 2, on and 1 or 0, 0)
+                t._dot.Size = UDim2.new(0, 3, on and 1 or 0, 0)
+                tween(t._dot, 0.14, { BackgroundTransparency = on and 0 or 1 })
+                t._btn.BackgroundColor3 = library.accentColor
+                tween(t._lbl, 0.14, { TextSize = on and 13 or 12 })
             end
             TabLibrary._current = tab
         end
