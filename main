@@ -43,7 +43,7 @@ local function pickFont(names, fallback)
     end
     return fallback
 end
-library.font     = pickFont({ "BuilderSans", "Montserrat", "Gotham" }, Enum.Font.Gotham)
+library.font     = pickFont({ "BuilderSans", "Montserrat", "Ubuntu", "Gotham" }, Enum.Font.Gotham)
 library.fontMed  = pickFont({ "BuilderSansMedium", "GothamMedium" }, Enum.Font.GothamMedium)
 library.fontBold = pickFont({ "BuilderSansBold", "MontserratBold", "GothamBold" }, Enum.Font.GothamBold)
 
@@ -75,9 +75,23 @@ local function conn(c)
     return c
 end
 
+-- Enum.Font has no BuilderSans on many clients, so Font/FontFace is the
+-- only way to actually get a modern face. Every text object this library
+-- builds goes through new(), so upgrading here covers all of them.
+library.fontFamily = "rbxasset://fonts/families/BuilderSans.json"
+local FONTFACE_OK = pcall(function()
+    return Font.new("rbxasset://fonts/families/BuilderSans.json", Enum.FontWeight.Regular)
+end)
+
 local function new(class, props, parent)
     local o = Instance.new(class)
     for k, v in pairs(props or {}) do o[k] = v end
+    if FONTFACE_OK and props and props.Font ~= nil then
+        local weight = Enum.FontWeight.Regular
+        if     props.Font == library.fontBold then weight = Enum.FontWeight.Bold
+        elseif props.Font == library.fontMed  then weight = Enum.FontWeight.Medium end
+        pcall(function() o.FontFace = Font.new(library.fontFamily, weight) end)
+    end
     if parent then o.Parent = parent end
     return o
 end
@@ -112,6 +126,19 @@ local function list(o, pad, dir)
         Padding = UDim.new(0, pad or 4),
         FillDirection = dir or Enum.FillDirection.Vertical,
     }, o)
+end
+
+-- UIS:GetMouseLocation() is measured BELOW the topbar inset, while
+-- AbsolutePosition inside an IgnoreGuiInset ScreenGui is measured from the
+-- true top of the screen. Comparing the two directly is off by the inset
+-- (36px on most clients), which makes every hit test miss. Use this for
+-- anything compared against AbsolutePosition.
+local GuiService = game:GetService("GuiService")
+local function mouseAbs()
+    local m = UIS:GetMouseLocation()
+    local ok, inset = pcall(function() return GuiService:GetGuiInset() end)
+    if ok and inset then return Vector2.new(m.X + inset.X, m.Y + inset.Y) end
+    return m
 end
 
 local function lerpColor(a, b, t) return a:Lerp(b, t) end
@@ -221,18 +248,32 @@ function library:LoadIcon(source, filename)
     if not source or source == "" then return nil end
     if tostring(source):match("^rbxassetid://") then return source end
     if tostring(source):match("^%d+$") then return "rbxassetid://" .. source end
-    local ok, id = pcall(function()
-        filename = filename or "droidware_icon.png"
-        if typeof(getcustomasset) ~= "function" or typeof(writefile) ~= "function" then
-            return nil
-        end
-        if typeof(isfile) == "function" and isfile(filename) then
-            return getcustomasset(filename)
-        end
-        writefile(filename, game:HttpGet(source))
-        return getcustomasset(filename)
-    end)
-    return (ok and id) or nil
+    filename = filename or "droidware_icon.png"
+    if typeof(getcustomasset) ~= "function" or typeof(writefile) ~= "function" then
+        warn("[DROIDWARE UI] icon: this executor has no writefile/getcustomasset")
+        return nil
+    end
+    -- a cached file from a previous run saves the download
+    if typeof(isfile) == "function" and isfile(filename) then
+        local okc, cached = pcall(getcustomasset, filename)
+        if okc and cached then return cached end
+    end
+    local okGet, data = pcall(function() return game:HttpGet(source) end)
+    if not okGet or type(data) ~= "string" or #data < 100 then
+        warn("[DROIDWARE UI] icon: could not download " .. tostring(source))
+        return nil
+    end
+    local okWrite = pcall(writefile, filename, data)
+    if not okWrite then
+        warn("[DROIDWARE UI] icon: writefile was refused")
+        return nil
+    end
+    local okAsset, id = pcall(getcustomasset, filename)
+    if not okAsset or not id then
+        warn("[DROIDWARE UI] icon: getcustomasset failed (image may be corrupt)")
+        return nil
+    end
+    return id
 end
 
 -- Smooth drag, eased so it carries weight.
@@ -380,7 +421,9 @@ function library:BuildFrame(parent, w, h)
         AnchorPoint = Vector2.new(0.5, 0.5),
         Position = UDim2.new(0.5, 0, 0.5, 0),
         Size = UDim2.new(1, -2, 1, -2),
-        BackgroundColor3 = self.bgColor,
+        -- white, because a UIGradient MULTIPLIES against BackgroundColor3:
+        -- tint this dark and the gradient is crushed to black and invisible
+        BackgroundColor3 = Color3.new(1, 1, 1),
         BorderSizePixel = 0,
         ClipsDescendants = true,
         ZIndex = 3,
@@ -430,7 +473,7 @@ function library:BuildHeader(bg, titleText, height)
     height = height or HEADER_H
     local header = new("Frame", {
         Name = "header", Size = UDim2.new(1, 0, 0, height),
-        BackgroundColor3 = self.surfaceColor,
+        BackgroundColor3 = Color3.new(1, 1, 1),   -- gradient supplies the colour
         BackgroundTransparency = 0.5,
         BorderSizePixel = 0, ZIndex = 5,
     }, bg)
@@ -691,7 +734,7 @@ function Groupbox:NewSlider(text, suffix, _a, _b, cfg, callback)
 
     local dragging = false
     local function fromMouse()
-        local x = UIS:GetMouseLocation().X
+        local x = mouseAbs().X
         local f = math.clamp((x - track.AbsolutePosition.X) / math.max(track.AbsoluteSize.X, 1), 0, 1)
         F:Set(mn + f * (mx - mn))
     end
@@ -774,12 +817,17 @@ function Groupbox:NewSelector(text, default, options, callback)
     }, box)
 
     -- the menu floats above everything on its own layer
+    -- the menu must not live inside the groupbox, which clips its children.
+    -- Prefer the window overlay; fall back to whatever ScreenGui we are in.
+    local menuHome = library._overlay
+        or row:FindFirstAncestorWhichIsA("ScreenGui")
+        or row
     local menu = new("Frame", {
         Name = "selectorMenu", Visible = false,
         BackgroundColor3 = library.surfaceColor,
         BorderSizePixel = 0, ZIndex = 200,
         ClipsDescendants = true,
-    }, library._overlay or row)
+    }, menuHome)
     corner(menu, 3)
     outline(menu, library.accentColor, 0.15)
     local menuList = list(menu, 1)
@@ -821,17 +869,32 @@ function Groupbox:NewSelector(text, default, options, callback)
     box.MouseButton1Click:Connect(function()
         if menu.Visible then close() return end
         rebuild()
-        menu.Position = UDim2.fromOffset(box.AbsolutePosition.X, box.AbsolutePosition.Y + box.AbsoluteSize.Y + 3)
+        -- open upward when there is not enough room below, otherwise a
+        -- dropdown near the bottom of the window renders off screen
+        local menuH = menu.Size.Y.Offset
+        local bp, bs = box.AbsolutePosition, box.AbsoluteSize
+        local viewH  = workspace.CurrentCamera
+            and workspace.CurrentCamera.ViewportSize.Y or 1080
+        local below  = bp.Y + bs.Y + 3
+        local above  = bp.Y - menuH - 3
+        local y = below
+        if below + menuH > viewH - 8 and above >= 8 then y = above end
+        menu.Position = UDim2.fromOffset(bp.X, y)
         menu.Visible  = true
     end)
     library:HoldConn(row, UIS.InputBegan:Connect(function(i)
         if i.UserInputType ~= Enum.UserInputType.MouseButton1 or not menu.Visible then return end
-        local m = UIS:GetMouseLocation()
-        local p, s = menu.AbsolutePosition, menu.AbsoluteSize
-        local bp, bs = box.AbsolutePosition, box.AbsoluteSize
-        local inMenu = m.X >= p.X and m.X <= p.X + s.X and m.Y >= p.Y and m.Y <= p.Y + s.Y
-        local inBox  = m.X >= bp.X and m.X <= bp.X + bs.X and m.Y >= bp.Y and m.Y <= bp.Y + bs.Y
-        if not inMenu and not inBox then close() end
+        -- InputBegan beats the option button's own click, so decide a frame
+        -- later: otherwise the menu can close out from under the selection
+        task.defer(function()
+            if not menu.Visible then return end
+            local m = mouseAbs()
+            local p, sz  = menu.AbsolutePosition, menu.AbsoluteSize
+            local bp, bs = box.AbsolutePosition, box.AbsoluteSize
+            local inMenu = m.X >= p.X and m.X <= p.X + sz.X and m.Y >= p.Y and m.Y <= p.Y + sz.Y
+            local inBox  = m.X >= bp.X and m.X <= bp.X + bs.X and m.Y >= bp.Y and m.Y <= bp.Y + bs.Y
+            if not inMenu and not inBox then close() end
+        end)
     end))
 
     function F:SetOption(v)
@@ -874,7 +937,7 @@ function Groupbox:NewColorPicker(text, default, callback)
         Visible = false, Size = UDim2.fromOffset(176, 150),
         BackgroundColor3 = library.surfaceColor, BorderSizePixel = 0,
         ZIndex = 200,
-    }, library._overlay or row)
+    }, library._overlay or row:FindFirstAncestorWhichIsA("ScreenGui") or row)
     corner(panel, 4)
     outline(panel, library.accentColor, 0.15)
 
@@ -928,13 +991,13 @@ function Groupbox:NewColorPicker(text, default, callback)
 
     local dragSV, dragHue = false, false
     local function pickSV()
-        local m = UIS:GetMouseLocation()
+        local m = mouseAbs()
         sat = math.clamp((m.X - sv.AbsolutePosition.X) / math.max(sv.AbsoluteSize.X, 1), 0, 1)
         v   = 1 - math.clamp((m.Y - sv.AbsolutePosition.Y) / math.max(sv.AbsoluteSize.Y, 1), 0, 1)
         apply(true)
     end
     local function pickHue()
-        local m = UIS:GetMouseLocation()
+        local m = mouseAbs()
         h = math.clamp((m.X - hueBar.AbsolutePosition.X) / math.max(hueBar.AbsoluteSize.X, 1), 0, 1)
         apply(true)
     end
@@ -954,11 +1017,14 @@ function Groupbox:NewColorPicker(text, default, callback)
 
     swatch.MouseButton1Click:Connect(function()
         panel.Visible = not panel.Visible
-        if panel.Visible then
-            panel.Position = UDim2.fromOffset(
-                math.max(8, swatch.AbsolutePosition.X - 140),
-                swatch.AbsolutePosition.Y + 20)
-        end
+        if not panel.Visible then return end
+        local ph    = panel.Size.Y.Offset
+        local sp    = swatch.AbsolutePosition
+        local viewH = workspace.CurrentCamera
+            and workspace.CurrentCamera.ViewportSize.Y or 1080
+        local y = sp.Y + 20
+        if y + ph > viewH - 8 then y = math.max(8, sp.Y - ph - 4) end
+        panel.Position = UDim2.fromOffset(math.max(8, sp.X - 140), y)
     end)
 
     function F:SetColor(c)
@@ -1222,7 +1288,7 @@ local function newGroupbox(column, title)
 
     local frame = new("Frame", {
         Name = "groupbox",
-        BackgroundColor3 = library.surfaceColor,
+        BackgroundColor3 = Color3.new(1, 1, 1),   -- gradient supplies the colour
         BorderSizePixel = 0,
         Size = UDim2.new(1, 0, 0, 0),
         AutomaticSize = Enum.AutomaticSize.Y,
@@ -1327,7 +1393,7 @@ function library:Init(toggleKey)
         Name = "nav",
         Position = UDim2.fromOffset(PAD, HEADER_H + PAD),
         Size = UDim2.new(0, NAV_W, 1, -(HEADER_H + PAD * 2)),
-        BackgroundColor3 = self.surfaceColor,
+        BackgroundColor3 = Color3.new(1, 1, 1),
         BorderSizePixel = 0, ZIndex = 5,
     }, bg)
     corner(nav, RADIUS)
@@ -1347,7 +1413,7 @@ function library:Init(toggleKey)
         AnchorPoint = Vector2.new(0.5, 1),
         Position = UDim2.new(0.5, 0, 1, -8),
         Size = UDim2.new(1, -16, 0, CARD_H),
-        BackgroundColor3 = self.surfaceColor,
+        BackgroundColor3 = Color3.new(1, 1, 1),
         BorderSizePixel = 0, ZIndex = 7,
     }, nav)
     corner(card, RADIUS)
@@ -1544,7 +1610,23 @@ function library:Init(toggleKey)
         local function select()
             for _, t in ipairs(TabLibrary._tabs) do
                 local on = (t == tab)
-                t._page.Visible = on
+                if on and not t._page.Visible then
+                    -- fade the incoming page up and settle it into place
+                    t._page.Visible = true
+                    local grid = t._page:FindFirstChild("grid")
+                    if grid then
+                        grid.Position = UDim2.fromOffset(0, 10)
+                        tween(grid, 0.16, { Position = UDim2.fromOffset(0, 0) })
+                        for _, d in ipairs(grid:GetDescendants()) do
+                            if d:IsA("Frame") and d.Name == "groupbox" then
+                                d.BackgroundTransparency = 1
+                                tween(d, 0.2, { BackgroundTransparency = 0 })
+                            end
+                        end
+                    end
+                else
+                    t._page.Visible = on
+                end
                 tween(t._btn, 0.12, { BackgroundTransparency = on and 0.25 or 1 })
                 tween(t._lbl, 0.12, { TextColor3 = on and library.textColor or library.textMuted })
                 t._dot.BackgroundColor3 = library.accentColor
@@ -1597,9 +1679,68 @@ function library:Init(toggleKey)
         return Components
     end
 
-    function TabLibrary:Toggle() edge.Visible = not edge.Visible return TabLibrary end
-    function TabLibrary:Show()   edge.Visible = true  return TabLibrary end
-    function TabLibrary:Hide()   edge.Visible = false return TabLibrary end
+    -- open and close animate: a UIScale pops the window, and the children
+    -- fade with it so it does not snap in and out
+    local openScale = new("UIScale", { Scale = 1 }, edge)
+    local animating = false
+    local function setFade(t)
+        for _, d in ipairs(edge:GetDescendants()) do
+            pcall(function()
+                if d:IsA("GuiObject") then
+                    if d:GetAttribute("baseT") == nil then
+                        d:SetAttribute("baseT", d.BackgroundTransparency)
+                    end
+                    local base = d:GetAttribute("baseT") or 0
+                    d.BackgroundTransparency = base + (1 - base) * t
+                elseif d:IsA("UIStroke") then
+                    if d:GetAttribute("baseT") == nil then
+                        d:SetAttribute("baseT", d.Transparency)
+                    end
+                    local base = d:GetAttribute("baseT") or 0
+                    d.Transparency = base + (1 - base) * t
+                end
+            end)
+        end
+    end
+    function TabLibrary:Show()
+        if animating or edge.Visible then edge.Visible = true return TabLibrary end
+        animating    = true
+        edge.Visible = true
+        openScale.Scale = 0.92
+        setFade(1)
+        tween(openScale, 0.18, { Scale = 1 })
+        task.spawn(function()
+            local t0 = os.clock()
+            while os.clock() - t0 < 0.18 do
+                setFade(1 - (os.clock() - t0) / 0.18)
+                RUN.RenderStepped:Wait()
+            end
+            setFade(0)
+            animating = false
+        end)
+        return TabLibrary
+    end
+    function TabLibrary:Hide()
+        if animating or not edge.Visible then edge.Visible = false return TabLibrary end
+        animating = true
+        tween(openScale, 0.14, { Scale = 0.94 })
+        task.spawn(function()
+            local t0 = os.clock()
+            while os.clock() - t0 < 0.14 do
+                setFade((os.clock() - t0) / 0.14)
+                RUN.RenderStepped:Wait()
+            end
+            edge.Visible    = false
+            openScale.Scale = 1
+            setFade(0)
+            animating = false
+        end)
+        return TabLibrary
+    end
+    function TabLibrary:Toggle()
+        if edge.Visible then TabLibrary:Hide() else TabLibrary:Show() end
+        return TabLibrary
+    end
     function TabLibrary:Text(t)  titleLbl.Text = tostring(t) return TabLibrary end
     function TabLibrary:UpdateKeybind(k)
         if typeof(k) == "string" then k = Enum.KeyCode[k] end
