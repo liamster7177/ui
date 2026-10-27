@@ -22,14 +22,15 @@ local LP      = Players.LocalPlayer
 local library = {}
 
 -- ---------- palette ----------
-library.accentColor   = Color3.fromRGB(215, 35, 45)
-library.accentSoft    = Color3.fromRGB(120, 22, 28)
+library.accentColor   = Color3.fromRGB(222, 38, 48)
+library.accentSoft    = Color3.fromRGB(118, 24, 32)
 library.outerColor    = Color3.fromRGB(0, 0, 0)
-library.bgColor       = Color3.fromRGB(24, 24, 26)
-library.edgeColor     = Color3.fromRGB(16, 16, 18)
-library.surfaceColor  = Color3.fromRGB(30, 30, 33)
-library.inputColor    = Color3.fromRGB(38, 38, 42)
-library.strokeColor   = Color3.fromRGB(52, 52, 57)
+library.bgColor       = Color3.fromRGB(13, 12, 15)
+library.edgeColor     = Color3.fromRGB(28, 23, 30)
+library.surfaceColor  = Color3.fromRGB(24, 22, 27)
+library.inputColor    = Color3.fromRGB(33, 30, 36)
+library.strokeColor   = Color3.fromRGB(62, 56, 68)
+library.icon          = ""   -- set to an image id or URL for the header
 library.textColor     = Color3.fromRGB(235, 235, 238)
 library.textSecondary = Color3.fromRGB(198, 198, 204)
 library.textMuted     = Color3.fromRGB(128, 128, 136)
@@ -42,7 +43,7 @@ library.fontMed       = Enum.Font.GothamMedium
 -- ---------- metrics ----------
 library.windowWidth  = 980
 library.windowHeight = 580
-local RADIUS   = 4      -- Linoria is square; 4 keeps it modern
+local RADIUS   = 6
 local NAV_W    = 158
 local HEADER_H = 34
 local PAD      = 8
@@ -108,6 +109,53 @@ end
 
 local function lerpColor(a, b, t) return a:Lerp(b, t) end
 
+-- A vertical sheen. Every surface gets one, which is what stops a
+-- flat fill reading as unfinished.
+local function sheen(o, top, mid, bot, rotation)
+    return new("UIGradient", {
+        Rotation = rotation or 112,
+        Color = ColorSequence.new{
+            ColorSequenceKeypoint.new(0.00, top),
+            ColorSequenceKeypoint.new(0.52, mid),
+            ColorSequenceKeypoint.new(1.00, bot),
+        },
+    }, o)
+end
+
+-- A soft accent bloom built from a gradient rather than a sliced PNG,
+-- so it renders without shipping an image asset.
+local function bloom(parent, color, transparency, size, position, rot)
+    local g = new("Frame", {
+        Name = "bloom",
+        BackgroundColor3 = color or library.accentColor,
+        BorderSizePixel = 0,
+        Size = size or UDim2.new(0.7, 0, 0, 180),
+        Position = position or UDim2.new(0, -40, 0, -90),
+        ZIndex = 0,
+    }, parent)
+    corner(g, 99)
+    new("UIGradient", {
+        Rotation = rot or 90,
+        Transparency = NumberSequence.new{
+            NumberSequenceKeypoint.new(0.00, transparency or 0.86),
+            NumberSequenceKeypoint.new(0.55, (transparency or 0.86) + (1 - (transparency or 0.86)) * 0.55),
+            NumberSequenceKeypoint.new(1.00, 1),
+        },
+    }, g)
+    return g
+end
+
+-- A halo: three strokes at falling opacity reads as a glow.
+local function halo(o, color)
+    local a = new("UIStroke", { Color = color, Transparency = 0.55, Thickness = 1,
+        ApplyStrokeMode = Enum.ApplyStrokeMode.Border }, o)
+    local b = new("UIStroke", { Color = color, Transparency = 0.86, Thickness = 3,
+        ApplyStrokeMode = Enum.ApplyStrokeMode.Border }, o)
+    local c = new("UIStroke", { Color = color, Transparency = 0.94, Thickness = 6,
+        ApplyStrokeMode = Enum.ApplyStrokeMode.Border }, o)
+    return a, b, c
+end
+
 local function tween(o, t, props)
     TS:Create(o, TweenInfo.new(t or 0.1, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), props):Play()
 end
@@ -154,12 +202,33 @@ function library:HoldConn(gui, c)
 end
 
 -- ===========================================================
--- Shared chrome: the frame, the drag, the edge resizing.
--- The window and every pop-out panel are built from these, so
--- they cannot drift apart.
+-- Chrome: the frame, the header, dragging, and the single
+-- bottom-right resize corner.
+--
+-- Edges and the other three corners DRAG. Only the bottom-right
+-- corner resizes.
 -- ===========================================================
 
--- Smooth drag, eased so it has weight rather than snapping.
+-- Load an image from a URL or an asset id, for the header picture.
+function library:LoadIcon(source, filename)
+    if not source or source == "" then return nil end
+    if tostring(source):match("^rbxassetid://") then return source end
+    if tostring(source):match("^%d+$") then return "rbxassetid://" .. source end
+    local ok, id = pcall(function()
+        filename = filename or "droidware_icon.png"
+        if typeof(getcustomasset) ~= "function" or typeof(writefile) ~= "function" then
+            return nil
+        end
+        if typeof(isfile) == "function" and isfile(filename) then
+            return getcustomasset(filename)
+        end
+        writefile(filename, game:HttpGet(source))
+        return getcustomasset(filename)
+    end)
+    return (ok and id) or nil
+end
+
+-- Smooth drag, eased so it carries weight.
 function library:MakeDraggable(obj, handle, latency)
     latency = latency or 0.045
     handle  = handle or obj
@@ -188,96 +257,103 @@ function library:MakeDraggable(obj, handle, latency)
     end))
 end
 
--- Resize from the frame's own edges. No handle square: the outer
--- few pixels of every side grab, and corners take both axes.
--- onLive(w,h) fires while dragging, onDone(w,h) once on release.
-function library:AddResizeEdges(frame, opts)
+-- Border handles. Sides and three corners drag the frame; the
+-- bottom-right corner is the only one that resizes.
+function library:AddEdgeHandles(frame, opts)
     opts = opts or {}
-    local E      = opts.margin or 6
+    local E = opts.margin or 7
     local minW, minH = opts.minW or 240, opts.minH or 150
     local maxW, maxH = opts.maxW or MAX_W, opts.maxH or MAX_H
     local onLive, onDone = opts.onLive, opts.onDone
 
-    local ZONES = {
-        { "N",  0, -1, UDim2.new(1, -E*2, 0, E),  UDim2.new(0, E, 0, 0) },
-        { "S",  0,  1, UDim2.new(1, -E*2, 0, E),  UDim2.new(0, E, 1, -E) },
-        { "W", -1,  0, UDim2.new(0, E, 1, -E*2),  UDim2.new(0, 0, 0, E) },
-        { "E",  1,  0, UDim2.new(0, E, 1, -E*2),  UDim2.new(1, -E, 0, E) },
-        { "NW", -1, -1, UDim2.fromOffset(E*2, E*2), UDim2.new(0, 0, 0, 0) },
-        { "NE",  1, -1, UDim2.fromOffset(E*2, E*2), UDim2.new(1, -E*2, 0, 0) },
-        { "SW", -1,  1, UDim2.fromOffset(E*2, E*2), UDim2.new(0, 0, 1, -E*2) },
-        { "SE",  1,  1, UDim2.fromOffset(E*2, E*2), UDim2.new(1, -E*2, 1, -E*2) },
+    -- drag zones: every edge and the three non-resizing corners
+    local DRAG = {
+        { UDim2.new(1, -E * 2, 0, E), UDim2.new(0, E, 0, 0) },            -- top
+        { UDim2.new(0, E, 1, -E * 2), UDim2.new(0, 0, 0, E) },            -- left
+        { UDim2.new(0, E, 1, -E * 2), UDim2.new(1, -E, 0, E) },           -- right
+        { UDim2.new(1, -E * 3, 0, E), UDim2.new(0, E, 1, -E) },           -- bottom, minus the grip
+        { UDim2.fromOffset(E * 2, E * 2), UDim2.new(0, 0, 0, 0) },        -- NW
+        { UDim2.fromOffset(E * 2, E * 2), UDim2.new(1, -E * 2, 0, 0) },   -- NE
+        { UDim2.fromOffset(E * 2, E * 2), UDim2.new(0, 0, 1, -E * 2) },   -- SW
     }
-
-    local hint = new("Frame", {
-        Name = "resizeHint", BackgroundColor3 = self.accentColor,
-        BackgroundTransparency = 1, BorderSizePixel = 0,
-        ZIndex = 60, Visible = false,
-    }, frame)
-    corner(hint, 2)
-
-    for _, z in ipairs(ZONES) do
-        local name, ax, ay, size, pos = z[1], z[2], z[3], z[4], z[5]
+    for i, z in ipairs(DRAG) do
         local b = new("TextButton", {
-            Name = "resize" .. name, Size = size, Position = pos,
+            Name = "dragEdge" .. i, Size = z[1], Position = z[2],
             BackgroundTransparency = 1, Text = "", AutoButtonColor = false,
             ZIndex = 61,
         }, frame)
-
-        local sizing, sw, sh, sx, sy, sm = false, 0, 0, 0, 0, nil
-
-        b.MouseEnter:Connect(function()
-            if sizing then return end
-            hint.Visible = true
-            hint.BackgroundTransparency = 0.4
-            if ax ~= 0 and ay == 0 then
-                hint.Size     = UDim2.new(0, 2, 1, -20)
-                hint.Position = UDim2.new(ax == 1 and 1 or 0, ax == 1 and -4 or 2, 0, 10)
-            elseif ay ~= 0 and ax == 0 then
-                hint.Size     = UDim2.new(1, -20, 0, 2)
-                hint.Position = UDim2.new(0, 10, ay == 1 and 1 or 0, ay == 1 and -4 or 2)
-            else
-                hint.Size     = UDim2.fromOffset(11, 11)
-                hint.Position = UDim2.new(ax == 1 and 1 or 0, ax == 1 and -14 or 3,
-                                          ay == 1 and 1 or 0, ay == 1 and -14 or 3)
-            end
-        end)
-        b.MouseLeave:Connect(function() if not sizing then hint.Visible = false end end)
-
-        b.InputBegan:Connect(function(i)
-            if i.UserInputType ~= Enum.UserInputType.MouseButton1
-            and i.UserInputType ~= Enum.UserInputType.Touch then return end
-            sizing = true
-            sw, sh = frame.AbsoluteSize.X, frame.AbsoluteSize.Y
-            sx, sy = frame.Position.X.Offset, frame.Position.Y.Offset
-            sm = UIS:GetMouseLocation()
-        end)
-        self:HoldConn(frame, UIS.InputChanged:Connect(function(i)
-            if not sizing or i.UserInputType ~= Enum.UserInputType.MouseMovement then return end
-            local d  = UIS:GetMouseLocation() - sm
-            local nw = math.clamp(sw + d.X * ax, minW, maxW)
-            local nh = math.clamp(sh + d.Y * ay, minH, maxH)
-            frame.Size     = UDim2.fromOffset(nw, nh)
-            frame.Position = UDim2.fromOffset(
-                sx + (ax == -1 and (sw - nw) or 0),
-                sy + (ay == -1 and (sh - nh) or 0))
-            if onLive then pcall(onLive, nw, nh) end
-        end))
-        self:HoldConn(frame, UIS.InputEnded:Connect(function(i)
-            if not sizing then return end
-            if i.UserInputType ~= Enum.UserInputType.MouseButton1
-            and i.UserInputType ~= Enum.UserInputType.Touch then return end
-            sizing = false
-            hint.Visible = false
-            if onDone then pcall(onDone, frame.AbsoluteSize.X, frame.AbsoluteSize.Y) end
-        end))
+        self:MakeDraggable(frame, b)
     end
+
+    -- the one resize corner
+    local grip = new("TextButton", {
+        Name = "resizeGrip",
+        AnchorPoint = Vector2.new(1, 1),
+        Position = UDim2.new(1, -3, 1, -3),
+        Size = UDim2.fromOffset(14, 14),
+        BackgroundTransparency = 1,
+        Text = "", AutoButtonColor = false, ZIndex = 62,
+    }, frame)
+
+    -- three stacked ticks, the usual grip mark
+    local ticks = {}
+    for i = 1, 3 do
+        local t = new("Frame", {
+            Name = "tick" .. i,
+            AnchorPoint = Vector2.new(1, 1),
+            Position = UDim2.new(1, -(i - 1) * 4, 1, 0),
+            Size = UDim2.fromOffset(2, i * 4),
+            BackgroundColor3 = library.textMuted,
+            BackgroundTransparency = 0.45,
+            BorderSizePixel = 0, ZIndex = 63,
+        }, grip)
+        corner(t, 1)
+        ticks[i] = t
+    end
+
+    local sizing = false
+    local function paintGrip(on)
+        for _, t in ipairs(ticks) do
+            tween(t, 0.1, {
+                BackgroundColor3 = on and library.accentColor or library.textMuted,
+                BackgroundTransparency = on and 0 or 0.45,
+            })
+        end
+    end
+    grip.MouseEnter:Connect(function() paintGrip(true) end)
+    grip.MouseLeave:Connect(function() if not sizing then paintGrip(false) end end)
+
+    local sw, sh, sm = 0, 0, nil
+    grip.InputBegan:Connect(function(i)
+        if i.UserInputType ~= Enum.UserInputType.MouseButton1
+        and i.UserInputType ~= Enum.UserInputType.Touch then return end
+        sizing = true
+        sw, sh = frame.AbsoluteSize.X, frame.AbsoluteSize.Y
+        sm = UIS:GetMouseLocation()
+        paintGrip(true)
+    end)
+    self:HoldConn(frame, UIS.InputChanged:Connect(function(i)
+        if not sizing or i.UserInputType ~= Enum.UserInputType.MouseMovement then return end
+        local d = UIS:GetMouseLocation() - sm
+        frame.Size = UDim2.fromOffset(
+            math.clamp(sw + d.X, minW, maxW),
+            math.clamp(sh + d.Y, minH, maxH))
+        if onLive then pcall(onLive, frame.AbsoluteSize.X, frame.AbsoluteSize.Y) end
+    end))
+    self:HoldConn(frame, UIS.InputEnded:Connect(function(i)
+        if not sizing then return end
+        if i.UserInputType ~= Enum.UserInputType.MouseButton1
+        and i.UserInputType ~= Enum.UserInputType.Touch then return end
+        sizing = false
+        paintGrip(false)
+        if onDone then pcall(onDone, frame.AbsoluteSize.X, frame.AbsoluteSize.Y) end
+    end))
     return frame
 end
+library.AddResizeEdges = library.AddEdgeHandles
 
--- The frame every window and panel is made of.
--- Linoria's double border: a black outer line, then the surface,
--- then a 1px grey inner line. No glow, no gradient.
+-- The frame every window and panel is made of: layered halo, dark
+-- edge, inner surface with a sheen, and an accent bloom top-left.
 function library:BuildFrame(parent, w, h)
     local edge = new("Frame", {
         Name = "edge",
@@ -288,9 +364,9 @@ function library:BuildFrame(parent, w, h)
         Active = true,
         ZIndex = 2,
     }, parent)
-    corner(edge, RADIUS + 1)
-    local outer = outline(edge, self.outerColor, 0)
-    outer.Name = "edgeOuter"
+    corner(edge, RADIUS + 2)
+    local h1, h2, h3 = halo(edge, self.accentColor)
+    h1.Name = "edgeAccent"
 
     local bg = new("Frame", {
         Name = "background",
@@ -302,40 +378,77 @@ function library:BuildFrame(parent, w, h)
         ClipsDescendants = true,
         ZIndex = 3,
     }, edge)
-    corner(bg, RADIUS)
-    local inner = outline(bg, self.strokeColor, 0.3)
-    inner.Name = "innerStroke"
+    corner(bg, RADIUS + 1)
+    local inner = new("UIStroke", {
+        Name = "innerStroke", Color = self.strokeColor,
+        Transparency = 0.62, Thickness = 1,
+        ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
+    }, bg)
+
+    sheen(bg,
+        Color3.fromRGB(23, 20, 26),
+        Color3.fromRGB(15, 14, 17),
+        Color3.fromRGB(11, 10, 13))
+
+    -- the OG's two ambient washes, rebuilt as gradients
+    bloom(bg, self.accentColor, 0.87,
+        UDim2.new(0.62, 0, 0, 210), UDim2.new(0.10, 0, 0, -120), 90)
+    bloom(bg, Color3.fromRGB(96, 70, 150), 0.92,
+        UDim2.new(0.5, 0, 0, 190), UDim2.new(0.62, 0, 1, -130), 270)
 
     self:OnTheme(function()
+        h1.Color, h2.Color, h3.Color = self.accentColor, self.accentColor, self.accentColor
         inner.Color = self.strokeColor
     end)
     return edge, bg
 end
 
--- Header strip: accent dot, title, optional subtitle, hairline rule.
+-- Header: picture, title, hairline rule with an accent falloff.
 function library:BuildHeader(bg, titleText, height)
     height = height or HEADER_H
     local header = new("Frame", {
         Name = "header", Size = UDim2.new(1, 0, 0, height),
-        BackgroundColor3 = library.surfaceColor,
-        BackgroundTransparency = 0.35,
+        BackgroundColor3 = self.surfaceColor,
+        BackgroundTransparency = 0.5,
         BorderSizePixel = 0, ZIndex = 5,
     }, bg)
+    sheen(header,
+        Color3.fromRGB(32, 28, 36),
+        Color3.fromRGB(24, 21, 27),
+        Color3.fromRGB(19, 17, 21))
 
-    local accentBar = new("Frame", {
-        Name = "accentBar",
-        Position = UDim2.fromOffset(0, 0),
-        Size = UDim2.new(0, 2, 1, 0),
+    local iconSize = math.min(height - 12, 24)
+    local iconGlow = new("Frame", {
+        Name = "iconGlow",
+        Position = UDim2.fromOffset(9, (height - iconSize) / 2 - 2),
+        Size = UDim2.fromOffset(iconSize + 4, iconSize + 4),
         BackgroundColor3 = self.accentColor,
+        BackgroundTransparency = 0.82,
+        BorderSizePixel = 0, ZIndex = 5,
+    }, header)
+    corner(iconGlow, 99)
+
+    local icon = new("ImageLabel", {
+        Name = "headerIcon",
+        Position = UDim2.fromOffset(11, (height - iconSize) / 2),
+        Size = UDim2.fromOffset(iconSize, iconSize),
+        BackgroundColor3 = self.accentColor,
+        BackgroundTransparency = 0,
         BorderSizePixel = 0, ZIndex = 6,
     }, header)
+    corner(icon, 99)
+    local id = self:LoadIcon(self.icon, "droidware_header.png")
+    if id then
+        icon.Image = id
+        icon.BackgroundTransparency = 1
+    end
 
     local title = new("TextLabel", {
         Name = "headerTitle",
         BackgroundTransparency = 1,
-        Position = UDim2.fromOffset(11, 0),
-        Size = UDim2.new(1, -60, 1, 0),
-        Font = self.fontBold, TextSize = 12,
+        Position = UDim2.fromOffset(13 + iconSize + 9, 0),
+        Size = UDim2.new(1, -(iconSize + 70), 1, 0),
+        Font = self.fontBold, TextSize = height >= 34 and 13 or 12,
         TextXAlignment = Enum.TextXAlignment.Left,
         TextColor3 = self.textColor,
         TextTruncate = Enum.TextTruncate.AtEnd,
@@ -346,15 +459,27 @@ function library:BuildHeader(bg, titleText, height)
         Name = "headerRule",
         Size = UDim2.new(1, 0, 0, 1),
         Position = UDim2.fromOffset(0, height),
-        BackgroundColor3 = self.strokeColor,
+        BackgroundColor3 = self.accentColor,
         BorderSizePixel = 0, ZIndex = 6,
     }, bg)
+    new("UIGradient", {
+        Color = ColorSequence.new{
+            ColorSequenceKeypoint.new(0, self.accentColor),
+            ColorSequenceKeypoint.new(1, self.strokeColor),
+        },
+        Transparency = NumberSequence.new{
+            NumberSequenceKeypoint.new(0.00, 0.15),
+            NumberSequenceKeypoint.new(0.45, 0.55),
+            NumberSequenceKeypoint.new(1.00, 0.92),
+        },
+    }, rule)
 
     self:OnTheme(function()
-        accentBar.BackgroundColor3 = self.accentColor
-        rule.BackgroundColor3      = self.strokeColor
+        iconGlow.BackgroundColor3 = self.accentColor
+        rule.BackgroundColor3     = self.accentColor
+        if icon.Image == "" then icon.BackgroundColor3 = self.accentColor end
     end)
-    return header, title
+    return header, title, icon
 end
 
 -- ===========================================================
@@ -444,9 +569,13 @@ function Groupbox:NewToggle(text, default, callback)
     hit.MouseButton1Click:Connect(function() F:Set(not state) end)
     hit.MouseEnter:Connect(function()
         if not state then label.TextColor3 = library.textColor end
+        tween(bStroke, 0.1, { Transparency = 0 })
+        tween(box, 0.1, { BackgroundColor3 = lerpColor(library.inputColor, library.accentSoft, 0.4) })
     end)
     hit.MouseLeave:Connect(function()
         if not state then label.TextColor3 = library.textSecondary end
+        tween(bStroke, 0.14, { Transparency = state and 0 or 0.25 })
+        tween(box, 0.14, { BackgroundColor3 = library.inputColor })
     end)
     library:OnTheme(function() paint(false) end)
     return F
@@ -501,6 +630,10 @@ function Groupbox:NewSlider(text, suffix, _a, _b, cfg, callback)
         BorderSizePixel = 0, ZIndex = 9,
     }, track)
     corner(fill, 3)
+    sheen(fill,
+        lerpColor(library.accentColor, Color3.new(1, 1, 1), 0.22),
+        library.accentColor,
+        lerpColor(library.accentColor, Color3.new(0, 0, 0), 0.25), 90)
 
     local function fmt(v)
         if step < 1 then return string.format("%.2f%s", v, suffix) end
@@ -543,6 +676,15 @@ function Groupbox:NewSlider(text, suffix, _a, _b, cfg, callback)
     hit.InputBegan:Connect(function(i)
         if i.UserInputType == Enum.UserInputType.MouseButton1
         or i.UserInputType == Enum.UserInputType.Touch then dragging = true fromMouse() end
+    end)
+    hit.MouseEnter:Connect(function()
+        tween(track, 0.1, { Size = UDim2.new(1, 0, 0, 11) })
+        tween(label, 0.1, { TextColor3 = library.textColor })
+    end)
+    hit.MouseLeave:Connect(function()
+        if dragging then return end
+        tween(track, 0.14, { Size = UDim2.new(1, 0, 0, 9) })
+        tween(label, 0.14, { TextColor3 = library.textSecondary })
     end)
     library:HoldConn(row, UIS.InputEnded:Connect(function(i)
         if i.UserInputType == Enum.UserInputType.MouseButton1
@@ -590,7 +732,15 @@ function Groupbox:NewSelector(text, default, options, callback)
         Text = "  " .. tostring(current or ""), ZIndex = 8,
     }, row)
     corner(box, 3)
-    local bStroke = outline(box, library.strokeColor, 0)
+    local bStroke = outline(box, library.strokeColor, 0.3)
+    box.MouseEnter:Connect(function()
+        tween(bStroke, 0.1, { Transparency = 0 })
+        tween(box, 0.1, { BackgroundColor3 = lerpColor(library.inputColor, library.accentSoft, 0.3) })
+    end)
+    box.MouseLeave:Connect(function()
+        tween(bStroke, 0.14, { Transparency = 0.3 })
+        tween(box, 0.14, { BackgroundColor3 = library.inputColor })
+    end)
 
     new("TextLabel", {
         BackgroundTransparency = 1,
@@ -694,7 +844,9 @@ function Groupbox:NewColorPicker(text, default, callback)
         AutoButtonColor = false, Text = "", ZIndex = 9,
     }, row)
     corner(swatch, 3)
-    outline(swatch, library.strokeColor, 0)
+    local swStroke = outline(swatch, library.strokeColor, 0.2)
+    swatch.MouseEnter:Connect(function() tween(swStroke, 0.1, { Transparency = 0 }) end)
+    swatch.MouseLeave:Connect(function() tween(swStroke, 0.14, { Transparency = 0.2 }) end)
 
     local panel = new("Frame", {
         Visible = false, Size = UDim2.fromOffset(176, 150),
@@ -825,7 +977,13 @@ function Groupbox:NewKeypicker(text, default, callback)
         Text = nameOf(key), ZIndex = 9,
     }, row)
     corner(btn, 3)
-    local bs = outline(btn, library.strokeColor, 0)
+    local bs = outline(btn, library.strokeColor, 0.3)
+    btn.MouseEnter:Connect(function()
+        if not listening then tween(bs, 0.1, { Transparency = 0 }) end
+    end)
+    btn.MouseLeave:Connect(function()
+        if not listening then tween(bs, 0.14, { Transparency = 0.3 }) end
+    end)
 
     local listening = false
     local F = {}
@@ -896,6 +1054,12 @@ function Groupbox:NewTextbox(text, default, placeholder, _a, _b, _c, _d, callbac
     local bs = outline(box, library.strokeColor, 0)
     padding(box, 8, 8, 0, 0)
 
+    box.MouseEnter:Connect(function()
+        if not box:IsFocused() then tween(bs, 0.1, { Transparency = 0.15 }) end
+    end)
+    box.MouseLeave:Connect(function()
+        if not box:IsFocused() then tween(bs, 0.14, { Transparency = 0.45 }) end
+    end)
     box.Focused:Connect(function() bs.Color, bs.Transparency = library.accentColor, 0.2 end)
     box.FocusLost:Connect(function()
         bs.Color, bs.Transparency = library.strokeColor, 0.45
@@ -941,10 +1105,12 @@ function Groupbox:NewButton(text, callback)
     }, inner)
 
     outer.MouseEnter:Connect(function()
-        tween(inner, 0.1, { BackgroundColor3 = lerpColor(library.surfaceColor, library.accentSoft, 0.5) })
+        tween(inner, 0.1, { BackgroundColor3 = lerpColor(library.surfaceColor, library.accentSoft, 0.55) })
+        tween(lbl,   0.1, { TextSize = 13 })
     end)
     outer.MouseLeave:Connect(function()
-        tween(inner, 0.1, { BackgroundColor3 = library.surfaceColor })
+        tween(inner, 0.14, { BackgroundColor3 = library.surfaceColor })
+        tween(lbl,   0.14, { TextSize = 12 })
     end)
     if callback then outer.MouseButton1Click:Connect(function() pcall(callback) end) end
 
@@ -1041,7 +1207,32 @@ local function newGroupbox(column, title)
         ZIndex = 6,
     }, column)
     corner(frame, RADIUS)
-    local gbStroke = outline(frame, library.strokeColor, 0)
+    local gbStroke = new("UIStroke", {
+        Color = library.strokeColor, Transparency = 0.45, Thickness = 1,
+        ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
+    }, frame)
+    local gbGlow = new("UIStroke", {
+        Color = library.accentColor, Transparency = 1, Thickness = 2,
+        ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
+    }, frame)
+    sheen(frame,
+        Color3.fromRGB(31, 28, 34),
+        Color3.fromRGB(25, 23, 28),
+        Color3.fromRGB(21, 19, 24))
+
+    -- hover lifts the box out of the page a touch
+    local hover = new("TextButton", {
+        BackgroundTransparency = 1, Text = "", AutoButtonColor = false,
+        Size = UDim2.new(1, 0, 1, 0), ZIndex = 5, Active = false,
+    }, frame)
+    hover.MouseEnter:Connect(function()
+        tween(gbStroke, 0.12, { Transparency = 0.2 })
+        tween(gbGlow,   0.12, { Transparency = 0.82 })
+    end)
+    hover.MouseLeave:Connect(function()
+        tween(gbStroke, 0.16, { Transparency = 0.45 })
+        tween(gbGlow,   0.16, { Transparency = 1 })
+    end)
 
     if title and title ~= "" then
         new("TextLabel", {
@@ -1068,6 +1259,7 @@ local function newGroupbox(column, title)
     gb._frame, gb._body = frame, body
     library:OnTheme(function()
         gbStroke.Color = library.strokeColor
+        gbGlow.Color   = library.accentColor
         local t = frame:FindFirstChild("gbTitle")
         if t then t.TextColor3 = library.accentColor end
     end)
@@ -1117,7 +1309,14 @@ function library:Init(toggleKey)
         BorderSizePixel = 0, ZIndex = 5,
     }, bg)
     corner(nav, RADIUS)
-    outline(nav, self.strokeColor, 0)
+    new("UIStroke", {
+        Color = self.strokeColor, Transparency = 0.5, Thickness = 1,
+        ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
+    }, nav)
+    sheen(nav,
+        Color3.fromRGB(28, 25, 31),
+        Color3.fromRGB(22, 20, 25),
+        Color3.fromRGB(18, 17, 21))
 
     local navScroll = new("ScrollingFrame", {
         Name = "navScroll", BackgroundTransparency = 1, BorderSizePixel = 0,
@@ -1163,7 +1362,8 @@ function library:Init(toggleKey)
     self._relayout = relayout
     conn(content:GetPropertyChangedSignal("AbsoluteSize"):Connect(relayout))
 
-    self:AddResizeEdges(edge, {
+    -- edges and the other corners drag; only bottom-right resizes
+    self:AddEdgeHandles(edge, {
         minW = MIN_W, minH = MIN_H, maxW = MAX_W, maxH = MAX_H,
         onLive = function() relayout() end,
         onDone = function(w, h)
@@ -1212,7 +1412,11 @@ function library:Init(toggleKey)
             BorderSizePixel = 0, AutoButtonColor = false,
             Text = "", ZIndex = 7,
         }, navScroll)
-        corner(btn, 3)
+        corner(btn, 4)
+        local btnGlow = new("UIStroke", {
+            Color = library.accentColor, Transparency = 1, Thickness = 1,
+            ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
+        }, btn)
 
         local dot = new("Frame", {
             Name = "activeBar",
@@ -1254,13 +1458,17 @@ function library:Init(toggleKey)
         tab._select = select
         btn.MouseButton1Click:Connect(select)
         btn.MouseEnter:Connect(function()
+            tween(btnGlow, 0.1, { Transparency = 0.6 })
             if TabLibrary._current ~= tab then
-                tween(btn, 0.1, { BackgroundTransparency = 0.65 })
+                tween(btn, 0.1, { BackgroundTransparency = 0.6 })
+                tween(lbl, 0.1, { TextColor3 = library.textSecondary })
             end
         end)
         btn.MouseLeave:Connect(function()
+            tween(btnGlow, 0.14, { Transparency = 1 })
             if TabLibrary._current ~= tab then
-                tween(btn, 0.1, { BackgroundTransparency = 1 })
+                tween(btn, 0.14, { BackgroundTransparency = 1 })
+                tween(lbl, 0.14, { TextColor3 = library.textMuted })
             end
         end)
 
@@ -1338,7 +1546,7 @@ function library:MakePanel(name, title, w, h, x, y)
     local edge, bg = self:BuildFrame(sg, w, h)
     edge.Position = UDim2.fromOffset(x or 80, y or 110)
 
-    local header, titleLbl = self:BuildHeader(bg, title, 28)
+    local header, titleLbl = self:BuildHeader(bg, title, 30)
     self:MakeDraggable(edge, header)
 
     local close = new("TextButton", {
@@ -1361,7 +1569,7 @@ function library:MakePanel(name, title, w, h, x, y)
         ZIndex = 5,
     }, bg)
 
-    self:AddResizeEdges(edge, { minW = 230, minH = 150 })
+    self:AddEdgeHandles(edge, { minW = 230, minH = 150 })
     return sg, content, self:Skin(), titleLbl, edge
 end
 
