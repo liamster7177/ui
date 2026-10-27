@@ -1920,7 +1920,7 @@ function library:Init(key)
     -- the inner navigation panel. This used to be a fixed purple-gray,
     -- which is why it stayed lighter when Background Color changed.
     tabButtonsEdge.BackgroundColor3 = library.sidebarColor
-    tabButtonsEdge.Position = UDim2.new(0, 108, 0, 308)
+    tabButtonsEdge.Position = UDim2.new(0, 108, 0, 81 + (_DW_H() - 86) / 2)
     tabButtonsEdge.Size = UDim2.new(0, 190, 0, _DW_H() - 86)
     tabButtonsEdge.BorderSizePixel = 0
     tabButtonsEdge.ClipsDescendants = false
@@ -1954,7 +1954,7 @@ function library:Init(key)
     tabButtons.AnchorPoint = Vector2.new(0.5, 0.5)
     tabButtons.BackgroundColor3 = library.sidebarColor
     tabButtons.ClipsDescendants = true
-    tabButtons.Position = UDim2.new(0.5, 0, 0, 176)
+    tabButtons.Position = UDim2.new(0.5, 0, 0, 6 + (_DW_H() - 200) / 2)
     tabButtons.Size = UDim2.new(0, 188, 0, _DW_H() - 200)
     tabButtons.BorderSizePixel = 0
     tabButtons.ZIndex = 4
@@ -2065,7 +2065,7 @@ function library:Init(key)
     containerEdge.Parent = background
     containerEdge.AnchorPoint = Vector2.new(0.5, 0.5)
     containerEdge.BackgroundColor3 = library.strokeSoftColor
-    containerEdge.Position = UDim2.new(0, 522, 0, 308)
+    containerEdge.Position = UDim2.new(0, 213 + (_DW_W() - 222) / 2, 0, 81 + (_DW_H() - 86) / 2)
     containerEdge.Size = UDim2.new(0, _DW_W() - 222, 0, _DW_H() - 86)
     containerEdge.BorderSizePixel = 0
     containerEdge.ClipsDescendants = false
@@ -2082,7 +2082,7 @@ function library:Init(key)
         contentAmbient.ImageTransparency = 0.94
         contentAmbient.ScaleType = Enum.ScaleType.Stretch
         contentAmbient.Position = UDim2.new(0, 180, 0, 92)
-        contentAmbient.Size = UDim2.new(0, 690, 0, 430)
+        contentAmbient.Size = UDim2.new(0, _DW_W() - 150, 0, _DW_H() - 110)
         contentAmbient.ZIndex = 3
         contentAmbient.Active = false
     end
@@ -7263,18 +7263,27 @@ end
 
 -- ===========================================================
 -- DROIDWARE additions
--- Pop-out panels built from the real window, a resize grip that
--- reflows the layout, and the small helpers they need.
+--
+-- Panels are BUILT, not cloned. Every one uses the same recipe
+-- the main window uses -- same edge colour, corner radii, soft
+-- glow, accent strokes, inner stroke and background gradient --
+-- so a panel is a small window rather than a copy of a big one.
+--
+-- Resizing is built into the frame edges. No handle square:
+-- the outer 6px of any side is the grab zone, corners included.
 -- ===========================================================
 
-local _DW_UIS = game:GetService("UserInputService")
-local _DW_RUN = game:GetService("RunService")
+local _DW_UIS   = game:GetService("UserInputService")
+local _DW_TWEEN = game:GetService("TweenService")
+
+local DW_HEADER   = 38     -- header strip height
+local DW_EDGE     = 6      -- resize grab margin
+local DW_DRAG_LAT = 0.04   -- same easing the main window drags with
 
 function library:Host()
     return (typeof(gethui) == "function" and gethui()) or game:GetService("CoreGui")
 end
 
--- The live window frame, wherever it ended up parented.
 function library:LiveWindow()
     local hosts = {}
     pcall(function() if typeof(gethui) == "function" then hosts[#hosts + 1] = gethui() end end)
@@ -7299,29 +7308,17 @@ function library:LiveWindow()
     return nil, nil
 end
 
--- Current palette, read off the live window so panels always match.
 function library:Skin()
-    local s = {
-        accent = self.accentColor  or Color3.fromRGB(230, 30, 40),
-        bg     = self.sidebarColor or Color3.fromRGB(12, 12, 12),
-        panel  = self.groupColor   or Color3.fromRGB(22, 16, 18),
-        text   = self.textColor    or Color3.fromRGB(228, 224, 228),
-        muted  = self.textMuted    or Color3.fromRGB(150, 148, 156),
-        radius = 11,
-        trans  = 0.03,
+    return {
+        accent = self.accentColor   or Color3.fromRGB(230, 30, 40),
+        bg     = self.bgColor       or Color3.fromRGB(10, 11, 17),
+        edge   = Color3.fromRGB(30, 24, 44),
+        inner  = Color3.fromRGB(75, 63, 105),
+        text   = self.textColor     or Color3.fromRGB(228, 224, 228),
+        muted  = self.textMuted     or Color3.fromRGB(150, 148, 156),
     }
-    pcall(function()
-        local _, bg = self:LiveWindow()
-        if not bg then return end
-        s.bg    = bg.BackgroundColor3
-        s.trans = bg.BackgroundTransparency
-        local c = bg:FindFirstChildWhichIsA("UICorner")
-        if c then s.radius = c.CornerRadius.Offset end
-    end)
-    return s
 end
 
--- Tie a global connection to a GUI so it dies with it.
 function library:HoldConn(gui, conn)
     if not (gui and conn) then return conn end
     self._dwConns = self._dwConns or setmetatable({}, { __mode = "k" })
@@ -7339,181 +7336,195 @@ function library:HoldConn(gui, conn)
     return conn
 end
 
--- Copy the window's gradient / ambience / stroke onto any frame.
-function library:DressLikeWindow(frame, skin)
-    skin = skin or self:Skin()
-    local _, bg = self:LiveWindow()
-    if bg then
-        pcall(function()
-            local g = bg:FindFirstChild("backgroundGradient")
-            if g and g:IsA("UIGradient") then g:Clone().Parent = frame end
-        end)
-        pcall(function()
-            for _, n in ipairs({ "ambientTop", "ambientSide" }) do
-                local a = bg:FindFirstChild(n)
-                if a and a:IsA("GuiObject") then
-                    local c = a:Clone(); c.ZIndex = 0; c.Parent = frame
-                end
+-- Smooth drag, same easing as the main window.
+function library:MakeDraggable(obj, handle, latency)
+    latency = latency or DW_DRAG_LAT
+    handle = handle or obj
+    handle.Active = true
+    local toggled, moving, start, startPos = false, nil, nil, nil
+
+    handle.InputBegan:Connect(function(inp)
+        if inp.UserInputType == Enum.UserInputType.MouseButton1
+        or inp.UserInputType == Enum.UserInputType.Touch then
+            toggled, start, startPos = true, inp.Position, obj.Position
+            inp.Changed:Connect(function()
+                if inp.UserInputState == Enum.UserInputState.End then toggled = false end
+            end)
+        end
+    end)
+    handle.InputChanged:Connect(function(inp)
+        if inp.UserInputType == Enum.UserInputType.MouseMovement
+        or inp.UserInputType == Enum.UserInputType.Touch then
+            moving = inp
+        end
+    end)
+    self:HoldConn(obj, _DW_UIS.InputChanged:Connect(function(inp)
+        if inp == moving and toggled then
+            local d = inp.Position - start
+            _DW_TWEEN:Create(obj, TweenInfo.new(latency), {
+                Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + d.X,
+                                     startPos.Y.Scale, startPos.Y.Offset + d.Y)
+            }):Play()
+        end
+    end))
+end
+
+-- Resize from the frame's own edges. No visible handle: the outer
+-- DW_EDGE pixels of each side grab, and the corners take both axes.
+-- onCommit(w, h) fires once on release.
+function library:AddResizeEdges(frame, opts)
+    opts = opts or {}
+    local minW, minH = opts.minW or 240, opts.minH or 160
+    local maxW, maxH = opts.maxW or 1920, opts.maxH or 1080
+    local skin = opts.skin or self:Skin()
+    local onCommit, onLive = opts.onCommit, opts.onLive
+
+    local ZONES = {
+        { n = "N",  ax = 0, ay = -1, s = UDim2.new(1, -DW_EDGE*2, 0, DW_EDGE),  p = UDim2.new(0, DW_EDGE, 0, 0) },
+        { n = "S",  ax = 0, ay =  1, s = UDim2.new(1, -DW_EDGE*2, 0, DW_EDGE),  p = UDim2.new(0, DW_EDGE, 1, -DW_EDGE) },
+        { n = "W",  ax = -1, ay = 0, s = UDim2.new(0, DW_EDGE, 1, -DW_EDGE*2),  p = UDim2.new(0, 0, 0, DW_EDGE) },
+        { n = "E",  ax =  1, ay = 0, s = UDim2.new(0, DW_EDGE, 1, -DW_EDGE*2),  p = UDim2.new(1, -DW_EDGE, 0, DW_EDGE) },
+        { n = "NW", ax = -1, ay = -1, s = UDim2.fromOffset(DW_EDGE*2, DW_EDGE*2), p = UDim2.new(0, 0, 0, 0) },
+        { n = "NE", ax =  1, ay = -1, s = UDim2.fromOffset(DW_EDGE*2, DW_EDGE*2), p = UDim2.new(1, -DW_EDGE*2, 0, 0) },
+        { n = "SW", ax = -1, ay =  1, s = UDim2.fromOffset(DW_EDGE*2, DW_EDGE*2), p = UDim2.new(0, 0, 1, -DW_EDGE*2) },
+        { n = "SE", ax =  1, ay =  1, s = UDim2.fromOffset(DW_EDGE*2, DW_EDGE*2), p = UDim2.new(1, -DW_EDGE*2, 1, -DW_EDGE*2) },
+    }
+
+    -- a hairline that lights up on the side you are about to grab
+    local hint = Instance.new("Frame")
+    hint.Name                   = "resizeHint"
+    hint.BackgroundColor3       = skin.accent
+    hint.BackgroundTransparency = 1
+    hint.BorderSizePixel        = 0
+    hint.ZIndex                 = 40
+    hint.Visible                = false
+    hint.Parent                 = frame
+    Instance.new("UICorner", hint).CornerRadius = UDim.new(1, 0)
+
+    for _, z in ipairs(ZONES) do
+        local b = Instance.new("TextButton")
+        b.Name                   = "resize" .. z.n
+        b.Size, b.Position       = z.s, z.p
+        b.BackgroundTransparency = 1
+        b.Text                   = ""
+        b.AutoButtonColor        = false
+        b.ZIndex                 = 41
+        b.Parent                 = frame
+
+        local sizing, sw, sh, sx, sy, sm = false, 0, 0, 0, 0, nil
+
+        b.MouseEnter:Connect(function()
+            if sizing then return end
+            hint.Visible = true
+            hint.BackgroundTransparency = 0.45
+            if z.ax ~= 0 and z.ay == 0 then
+                hint.Size     = UDim2.new(0, 2, 1, -18)
+                hint.Position = UDim2.new(z.ax == 1 and 1 or 0, z.ax == 1 and -4 or 2, 0, 9)
+            elseif z.ay ~= 0 and z.ax == 0 then
+                hint.Size     = UDim2.new(1, -18, 0, 2)
+                hint.Position = UDim2.new(0, 9, z.ay == 1 and 1 or 0, z.ay == 1 and -4 or 2)
+            else
+                hint.Size     = UDim2.fromOffset(10, 10)
+                hint.Position = UDim2.new(z.ax == 1 and 1 or 0, z.ax == 1 and -13 or 3,
+                                          z.ay == 1 and 1 or 0, z.ay == 1 and -13 or 3)
             end
         end)
+        b.MouseLeave:Connect(function()
+            if not sizing then hint.Visible = false end
+        end)
+
+        b.InputBegan:Connect(function(i)
+            if i.UserInputType ~= Enum.UserInputType.MouseButton1
+            and i.UserInputType ~= Enum.UserInputType.Touch then return end
+            sizing = true
+            sw, sh = frame.Size.X.Offset, frame.Size.Y.Offset
+            sx, sy = frame.Position.X.Offset, frame.Position.Y.Offset
+            sm = _DW_UIS:GetMouseLocation()
+        end)
+        self:HoldConn(frame, _DW_UIS.InputChanged:Connect(function(i)
+            if not sizing or i.UserInputType ~= Enum.UserInputType.MouseMovement then return end
+            local d  = _DW_UIS:GetMouseLocation() - sm
+            local nw = math.clamp(sw + d.X * z.ax, minW, maxW)
+            local nh = math.clamp(sh + d.Y * z.ay, minH, maxH)
+            frame.Size = UDim2.fromOffset(nw, nh)
+            frame.Position = UDim2.fromOffset(
+                sx + (z.ax == -1 and (sw - nw) or 0),
+                sy + (z.ay == -1 and (sh - nh) or 0))
+            if onLive then pcall(onLive, nw, nh) end
+        end))
+        self:HoldConn(frame, _DW_UIS.InputEnded:Connect(function(i)
+            if not sizing then return end
+            if i.UserInputType ~= Enum.UserInputType.MouseButton1
+            and i.UserInputType ~= Enum.UserInputType.Touch then return end
+            sizing = false
+            hint.Visible = false
+            if onCommit then pcall(onCommit, frame.Size.X.Offset, frame.Size.Y.Offset) end
+        end))
     end
-    local st = Instance.new("UIStroke")
-    st.Name = "panelStroke"
-    local srcStroke = bg and bg.Parent and bg.Parent:FindFirstChild("windowAccentStroke")
-    if srcStroke and srcStroke:IsA("UIStroke") then
-        st.Color, st.Thickness, st.Transparency =
-            srcStroke.Color, srcStroke.Thickness, srcStroke.Transparency
-    else
-        st.Color, st.Thickness, st.Transparency = skin.accent, 1, 0.45
-    end
-    st.Parent = frame
     return frame
 end
 
-local DW_PANEL_HEADER = 34
+-- The window recipe, at any size. Returns edge, background.
+function library:BuildWindowFrame(parent, w, h, skin)
+    skin = skin or self:Skin()
 
--- Clone the real window and strip it down to a panel shell.
-function library:_PanelShell(parent, title, skin)
-    local edge, bg = self:LiveWindow()
-    if not (edge and bg) then return nil end
+    local edge = Instance.new("Frame")
+    edge.Name             = "edge"
+    edge.BackgroundColor3 = skin.edge
+    edge.BorderSizePixel  = 0
+    edge.ClipsDescendants = false
+    edge.Size             = UDim2.fromOffset(w, h)
+    edge.ZIndex           = 2
+    edge.Active           = true
+    edge.Parent           = parent
+    local ec = Instance.new("UICorner") ec.CornerRadius = UDim.new(0, 16) ec.Parent = edge
 
-    local shell
-    local ok = pcall(function() edge.Archivable = true shell = edge:Clone() end)
-    if not ok or not shell then return nil end
+    pcall(function() self:AddSoftGlow(edge, 0.72, 34, skin.accent, 0) end)
 
-    for _, d in ipairs(shell:GetDescendants()) do
-        if d:IsA("UIScale") then pcall(function() d:Destroy() end) end
-    end
-    local sbg = shell:FindFirstChild("background")
-    if not sbg then shell:Destroy() return nil end
+    local accentStroke = Instance.new("UIStroke")
+    accentStroke.Name = "windowAccentStroke"
+    accentStroke.Color, accentStroke.Transparency, accentStroke.Thickness = skin.accent, 0.54, 1
+    accentStroke.Parent = edge
 
-    local KEEP = {
-        headerLabel = true, headerIcon = true, headerIconGlow = true,
-        headerProduct = true, barFolder = true, backgroundCorner = true,
-        backgroundGradient = true, ambientTop = true, ambientSide = true,
-        windowStroke = true,
+    local glowStroke = Instance.new("UIStroke")
+    glowStroke.Name = "windowGlowStroke"
+    glowStroke.Color, glowStroke.Transparency, glowStroke.Thickness = skin.accent, 0.87, 4
+    glowStroke.Parent = edge
+
+    local background = Instance.new("Frame")
+    background.Name             = "background"
+    background.AnchorPoint      = Vector2.new(0.5, 0.5)
+    background.Position         = UDim2.new(0.5, 0, 0.5, 0)
+    background.Size             = UDim2.new(1, -2, 1, -2)
+    background.BackgroundColor3 = skin.bg
+    background.BorderSizePixel  = 0
+    background.ClipsDescendants = true
+    background.ZIndex           = 3
+    background.Parent           = edge
+    local bc = Instance.new("UICorner") bc.CornerRadius = UDim.new(0, 15) bc.Parent = background
+
+    local innerStroke = Instance.new("UIStroke")
+    innerStroke.Name = "windowStroke"
+    innerStroke.Color, innerStroke.Transparency, innerStroke.Thickness = skin.inner, 0.66, 1
+    innerStroke.Parent = background
+
+    local grad = Instance.new("UIGradient")
+    grad.Name = "backgroundGradient"
+    grad.Color = ColorSequence.new{
+        ColorSequenceKeypoint.new(0.00, Color3.fromRGB(15, 16, 23)),
+        ColorSequenceKeypoint.new(0.48, Color3.fromRGB(10, 11, 17)),
+        ColorSequenceKeypoint.new(1.00, Color3.fromRGB(8, 9, 14)),
     }
-    for _, c in ipairs(sbg:GetChildren()) do
-        if not KEEP[c.Name] and not c:IsA("UICorner")
-           and not c:IsA("UIGradient") and not c:IsA("UIStroke") then
-            pcall(function() c:Destroy() end)
-        end
-    end
+    grad.Rotation = 112
+    grad.Parent   = background
 
-    shell.Name        = "panelShell"
-    shell.AnchorPoint = Vector2.new(0, 0)
-    shell.Position    = UDim2.new(0, 0, 0, 0)
-    shell.Size        = UDim2.new(1, 0, 1, 0)
-    shell.Active      = true
-    shell.Parent      = parent
-
-    local function at(n) return sbg:FindFirstChild(n) end
-    local hl = at("headerLabel")
-    if hl then hl.Size = UDim2.new(1, -12, 0, DW_PANEL_HEADER) hl.Text = "" end
-    local hi, hg = at("headerIcon"), at("headerIconGlow")
-    if hi then hi.Size = UDim2.fromOffset(18, 18) hi.Position = UDim2.fromOffset(11, 8) end
-    if hg then hg.Size = UDim2.fromOffset(34, 34) hg.Position = UDim2.fromOffset(3, 0) end
-    local hp = at("headerProduct")
-    if hp then
-        hp.Position     = UDim2.fromOffset(36, 0)
-        hp.Size         = UDim2.new(1, -74, 0, DW_PANEL_HEADER)
-        hp.Text         = title or "PANEL"
-        hp.TextSize     = 12
-        hp.TextTruncate = Enum.TextTruncate.AtEnd
-    end
-    local bf = at("barFolder")
-    if bf then
-        bf.Position = UDim2.fromOffset(0, DW_PANEL_HEADER)
-        bf.Size     = UDim2.new(1, 0, 0, 1)
-        local b = bf:FindFirstChild("bar")
-        if b then b.Size = UDim2.new(1, -24, 0, 1) b.Position = UDim2.fromOffset(12, 0) end
-    end
-
-    local content = Instance.new("Frame")
-    content.Name                   = "content"
-    content.BackgroundTransparency = 1
-    content.Size                   = UDim2.new(1, 0, 1, 0)
-    content.ZIndex                 = 6
-    content.Parent                 = shell
-    return shell, content, hp
+    return edge, background
 end
 
--- Give any frame draggable resize handles on all four corners.
-function library:AddCornerGrips(root, target, skin, minW, minH, onDone)
-    skin  = skin or self:Skin()
-    minW, minH = minW or 250, minH or 180
-    local CORNERS = {
-        { n = "BR", p = UDim2.new(1, -13, 1, -13), sx =  1, sy =  1, mx = 0, my = 0 },
-        { n = "BL", p = UDim2.new(0,   0, 1, -13), sx = -1, sy =  1, mx = 1, my = 0 },
-        { n = "TR", p = UDim2.new(1, -13, 0,   0), sx =  1, sy = -1, mx = 0, my = 1 },
-        { n = "TL", p = UDim2.new(0,   0, 0,   0), sx = -1, sy = -1, mx = 1, my = 1 },
-    }
-    for _, c in ipairs(CORNERS) do
-        local g = Instance.new("TextButton")
-        g.Name                   = "grip" .. c.n
-        g.Size                   = UDim2.fromOffset(13, 13)
-        g.Position               = c.p
-        g.BackgroundColor3       = skin.accent
-        g.BackgroundTransparency = 0.85
-        g.BorderSizePixel        = 0
-        g.AutoButtonColor        = false
-        g.Text                   = ""
-        g.ZIndex                 = 30
-        g.Parent                 = target
-        Instance.new("UICorner", g).CornerRadius = UDim.new(0, 4)
-
-        local sizing, ss, sp, sm = false, nil, nil, nil
-        g.MouseEnter:Connect(function() g.BackgroundTransparency = 0.3 end)
-        g.MouseLeave:Connect(function() if not sizing then g.BackgroundTransparency = 0.85 end end)
-        g.InputBegan:Connect(function(i)
-            if i.UserInputType == Enum.UserInputType.MouseButton1 then
-                sizing, ss, sp, sm = true, root.Size, root.Position, _DW_UIS:GetMouseLocation()
-            end
-        end)
-        self:HoldConn(root, _DW_UIS.InputEnded:Connect(function(i)
-            if i.UserInputType == Enum.UserInputType.MouseButton1 and sizing then
-                sizing = false
-                g.BackgroundTransparency = 0.85
-                if onDone then pcall(onDone, root.Size.X.Offset, root.Size.Y.Offset) end
-            end
-        end))
-        self:HoldConn(root, _DW_UIS.InputChanged:Connect(function(i)
-            if sizing and i.UserInputType == Enum.UserInputType.MouseMovement then
-                local d  = _DW_UIS:GetMouseLocation() - sm
-                local nw = math.max(minW, ss.X.Offset + d.X * c.sx)
-                local nh = math.max(minH, ss.Y.Offset + d.Y * c.sy)
-                root.Size     = UDim2.fromOffset(nw, nh)
-                root.Position = UDim2.fromOffset(
-                    sp.X.Offset + (c.mx == 1 and (ss.X.Offset - nw) or 0),
-                    sp.Y.Offset + (c.my == 1 and (ss.Y.Offset - nh) or 0))
-            end
-        end))
-    end
-end
-
--- Make any frame draggable by a handle.
-function library:MakeDraggable(root, handle)
-    local dragging, sp, sm = false, nil, nil
-    handle.Active = true
-    handle.InputBegan:Connect(function(i)
-        if i.UserInputType == Enum.UserInputType.MouseButton1 then
-            dragging, sp, sm = true, root.Position, _DW_UIS:GetMouseLocation()
-        end
-    end)
-    self:HoldConn(root, _DW_UIS.InputEnded:Connect(function(i)
-        if i.UserInputType == Enum.UserInputType.MouseButton1 then dragging = false end
-    end))
-    self:HoldConn(root, _DW_UIS.InputChanged:Connect(function(i)
-        if dragging and i.UserInputType == Enum.UserInputType.MouseMovement then
-            local d = _DW_UIS:GetMouseLocation() - sm
-            root.Position = UDim2.fromOffset(sp.X.Offset + d.X, sp.Y.Offset + d.Y)
-        end
-    end))
-end
-
--- A pop-out panel that looks exactly like the main window.
--- Returns: ScreenGui, content Frame, skin table, title TextLabel
+-- A pop-out panel. Same chrome as the window, sized for a panel.
+-- Returns: ScreenGui, content Frame, skin, title TextLabel, edge Frame
 function library:MakePanel(name, title, w, h, x, y)
+    w, h = w or 320, h or 400
     local host = self:Host()
     pcall(function()
         local old = host:FindFirstChild(name)
@@ -7523,148 +7534,115 @@ function library:MakePanel(name, title, w, h, x, y)
 
     local sg = Instance.new("ScreenGui")
     sg.Name, sg.ResetOnSpawn, sg.IgnoreGuiInset = name, false, true
-    sg.DisplayOrder = 100            -- stays under the main window
+    sg.DisplayOrder  = 100          -- under the main window
+    sg.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
     sg.Parent = host
 
-    local root = Instance.new("Frame")
-    root.Size                   = UDim2.fromOffset(w or 320, h or 400)
-    root.Position               = UDim2.fromOffset(x or 80, y or 110)
-    root.BackgroundTransparency = 1
-    root.BorderSizePixel        = 0
-    root.Active                 = true
-    root.Parent                 = sg
+    local edge, background = self:BuildWindowFrame(sg, w, h, skin)
+    edge.Position = UDim2.fromOffset(x or 80, y or 110)
 
-    local shell, content, titleLbl = self:_PanelShell(root, title, skin)
-    local handle
+    -- header
+    local header = Instance.new("Frame")
+    header.Name                   = "panelHeader"
+    header.Size                   = UDim2.new(1, 0, 0, DW_HEADER)
+    header.BackgroundTransparency = 1
+    header.BorderSizePixel        = 0
+    header.ZIndex                 = 5
+    header.Parent                 = background
 
-    if shell then
-        handle = titleLbl or shell
-    else
-        -- window not up yet: same palette, plain shell
-        local f = Instance.new("Frame")
-        f.Size                   = UDim2.new(1, 0, 1, 0)
-        f.BackgroundColor3       = skin.bg
-        f.BackgroundTransparency = skin.trans
-        f.BorderSizePixel        = 0
-        f.Parent                 = root
-        Instance.new("UICorner", f).CornerRadius = UDim.new(0, skin.radius)
-        self:DressLikeWindow(f, skin)
+    local dot = Instance.new("Frame")
+    dot.Size             = UDim2.fromOffset(8, 8)
+    dot.Position         = UDim2.fromOffset(14, DW_HEADER / 2 - 4)
+    dot.BackgroundColor3 = skin.accent
+    dot.BorderSizePixel  = 0
+    dot.ZIndex           = 6
+    dot.Parent           = header
+    Instance.new("UICorner", dot).CornerRadius = UDim.new(1, 0)
 
-        local bar = Instance.new("Frame")
-        bar.Size                   = UDim2.new(1, 0, 0, DW_PANEL_HEADER)
-        bar.BackgroundTransparency = 1
-        bar.BorderSizePixel        = 0
-        bar.Parent                 = f
+    local titleLbl = Instance.new("TextLabel")
+    titleLbl.Name                   = "panelTitle"
+    titleLbl.Size                   = UDim2.new(1, -74, 1, 0)
+    titleLbl.Position               = UDim2.fromOffset(30, 0)
+    titleLbl.BackgroundTransparency = 1
+    titleLbl.Font                   = Enum.Font.GothamBold
+    titleLbl.TextSize               = 12
+    titleLbl.TextXAlignment         = Enum.TextXAlignment.Left
+    titleLbl.TextColor3             = skin.text
+    titleLbl.TextTruncate           = Enum.TextTruncate.AtEnd
+    titleLbl.Text                   = title or "PANEL"
+    titleLbl.ZIndex                 = 6
+    titleLbl.Parent                 = header
 
-        local tl = Instance.new("TextLabel")
-        tl.Size                   = UDim2.new(1, -74, 1, 0)
-        tl.Position               = UDim2.fromOffset(14, 0)
-        tl.BackgroundTransparency = 1
-        tl.Font, tl.TextSize      = Enum.Font.GothamBold, 12
-        tl.TextXAlignment         = Enum.TextXAlignment.Left
-        tl.TextColor3             = skin.text
-        tl.TextTruncate           = Enum.TextTruncate.AtEnd
-        tl.Text                   = title or "PANEL"
-        tl.Parent                 = bar
-
-        content, titleLbl, handle = f, tl, bar
-    end
+    -- the same hairline rule the window puts under its header
+    local rule = Instance.new("Frame")
+    rule.Name             = "headerRule"
+    rule.Size             = UDim2.new(1, -24, 0, 1)
+    rule.Position         = UDim2.fromOffset(12, DW_HEADER)
+    rule.BackgroundColor3 = skin.inner
+    rule.BackgroundTransparency = 0.4
+    rule.BorderSizePixel  = 0
+    rule.ZIndex           = 6
+    rule.Parent           = background
+    local ruleGrad = Instance.new("UIGradient")
+    ruleGrad.Color = ColorSequence.new{
+        ColorSequenceKeypoint.new(0.00, skin.accent),
+        ColorSequenceKeypoint.new(1.00, skin.inner),
+    }
+    ruleGrad.Transparency = NumberSequence.new{
+        NumberSequenceKeypoint.new(0.00, 0.25),
+        NumberSequenceKeypoint.new(1.00, 0.95),
+    }
+    ruleGrad.Parent = rule
 
     local close = Instance.new("TextButton")
-    close.Size                   = UDim2.fromOffset(20, 18)
-    close.Position               = UDim2.new(1, -28, 0, 8)
+    close.Name                   = "panelClose"
+    close.Size                   = UDim2.fromOffset(22, 22)
+    close.Position               = UDim2.new(1, -30, 0, DW_HEADER / 2 - 11)
     close.BackgroundTransparency = 1
     close.BorderSizePixel        = 0
     close.AutoButtonColor        = false
-    close.Font, close.TextSize   = Enum.Font.GothamBold, 12
+    close.Font                   = Enum.Font.GothamBold
+    close.TextSize               = 12
     close.TextColor3             = skin.muted
     close.Text                   = "X"
-    close.ZIndex                 = 20
-    close.Parent                 = content
+    close.ZIndex                 = 7
+    close.Parent                 = header
     close.MouseEnter:Connect(function() close.TextColor3 = skin.accent end)
     close.MouseLeave:Connect(function() close.TextColor3 = skin.muted end)
     close.MouseButton1Click:Connect(function() sg:Destroy() end)
 
-    self:MakeDraggable(root, handle)
-    self:AddCornerGrips(root, content, skin, 250, 180)
-    return sg, content, skin, titleLbl
+    -- content: panel bodies position against this, origin under the header
+    local content = Instance.new("Frame")
+    content.Name                   = "content"
+    content.Position               = UDim2.fromOffset(0, 0)
+    content.Size                   = UDim2.new(1, 0, 1, 0)
+    content.BackgroundTransparency = 1
+    content.BorderSizePixel        = 0
+    content.ZIndex                 = 5
+    content.Parent                 = background
+
+    self:MakeDraggable(edge, header)
+    self:AddResizeEdges(edge, { skin = skin, minW = 240, minH = 160 })
+    return sg, content, skin, titleLbl, edge
 end
 
--- Bottom-right grip on the MAIN window. Dragging previews with a scale,
--- releasing commits a real resize: onResize(w, h) should set
--- library.windowWidth/Height and rebuild, so the columns reflow.
-function library:AddWindowResizeGrip(onResize)
+-- Resize the MAIN window from its own edges. Layout is decided at build
+-- time, so release commits the size and asks the caller to rebuild.
+function library:AddWindowResizeEdges(onRebuild)
     local edge = self:LiveWindow()
     if not edge then return false end
-    pcall(function()
-        local old = edge:FindFirstChild("dwResizeGrip")
-        if old then old:Destroy() end
-    end)
-    local skin = self:Skin()
-
-    local g = Instance.new("TextButton")
-    g.Name                   = "dwResizeGrip"
-    g.Size                   = UDim2.fromOffset(16, 16)
-    g.AnchorPoint            = Vector2.new(1, 1)
-    g.Position               = UDim2.new(1, -5, 1, -5)
-    g.BackgroundColor3       = skin.accent
-    g.BackgroundTransparency = 0.7
-    g.BorderSizePixel        = 0
-    g.AutoButtonColor        = false
-    g.Text                   = ""
-    g.ZIndex                 = 60
-    g.Parent                 = edge
-    Instance.new("UICorner", g).CornerRadius = UDim.new(0, 4)
-
-    local ghost = Instance.new("Frame")
-    ghost.Name                   = "dwResizeGhost"
-    ghost.BackgroundTransparency = 1
-    ghost.BorderSizePixel        = 0
-    ghost.Visible                = false
-    ghost.ZIndex                 = 59
-    ghost.AnchorPoint            = edge.AnchorPoint
-    ghost.Position               = edge.Position
-    ghost.Parent                 = edge.Parent
-    local gc = Instance.new("UICorner") gc.CornerRadius = UDim.new(0, 10) gc.Parent = ghost
-    local gs = Instance.new("UIStroke")
-    gs.Color, gs.Thickness, gs.Transparency = skin.accent, 1, 0.2
-    gs.Parent = ghost
-
-    local sizing, sw, sh, sm = false, 0, 0, nil
-    g.MouseEnter:Connect(function() g.BackgroundTransparency = 0.25 end)
-    g.MouseLeave:Connect(function() if not sizing then g.BackgroundTransparency = 0.7 end end)
-
-    g.InputBegan:Connect(function(i)
-        if i.UserInputType ~= Enum.UserInputType.MouseButton1 then return end
-        sizing = true
-        sw, sh = edge.AbsoluteSize.X, edge.AbsoluteSize.Y
-        sm = _DW_UIS:GetMouseLocation()
-        ghost.Size    = UDim2.fromOffset(sw, sh)
-        ghost.Visible = true
-    end)
-    self:HoldConn(edge, _DW_UIS.InputChanged:Connect(function(i)
-        if not sizing or i.UserInputType ~= Enum.UserInputType.MouseMovement then return end
-        local d = _DW_UIS:GetMouseLocation() - sm
-        ghost.Size = UDim2.fromOffset(
-            math.clamp(sw + d.X, 720, 1920),
-            math.clamp(sh + d.Y, 460, 1080))
-    end))
-    self:HoldConn(edge, _DW_UIS.InputEnded:Connect(function(i)
-        if not sizing or i.UserInputType ~= Enum.UserInputType.MouseButton1 then return end
-        sizing = false
-        g.BackgroundTransparency = 0.7
-        ghost.Visible = false
-        local nw = math.clamp(ghost.Size.X.Offset, 720, 1920)
-        local nh = math.clamp(ghost.Size.Y.Offset, 460, 1080)
-        library.windowWidth, library.windowHeight = nw, nh
-        if onResize then pcall(onResize, nw, nh) end
-        pcall(function() ghost:Destroy() end)
-    end))
+    if edge:FindFirstChild("resizeSE") then return true end
+    self:AddResizeEdges(edge, {
+        skin = self:Skin(),
+        minW = 720, minH = 460, maxW = 1920, maxH = 1080,
+        onCommit = function(w, h)
+            library.windowWidth, library.windowHeight = w, h
+            if onRebuild then pcall(onRebuild, w, h) end
+        end,
+    })
     return true
 end
 
--- Strip anything that draws from a cloned character (attachments, beams,
--- trails, particles, highlights) so it is safe inside a ViewportFrame.
 function library:CleanCharacterClone(model)
     for _, d in ipairs(model:GetDescendants()) do
         if d:IsA("Script") or d:IsA("LocalScript")
@@ -7675,16 +7653,61 @@ function library:CleanCharacterClone(model)
            or d:IsA("BillboardGui") or d:IsA("SurfaceGui") then
             pcall(function() d:Destroy() end)
         elseif d:IsA("BasePart") then
-            d.Anchored   = true
-            d.CanCollide = false
-            d.CastShadow = false
+            d.Anchored, d.CanCollide, d.CastShadow = true, false, false
             pcall(function() d.LocalTransparencyModifier = 0 end)
         end
     end
     return model
 end
 
--- Remove any leftover watermark / branding from an earlier run.
+-- Re-dress a hand-built GUI (fly HUD, prompts) in the window's chrome.
+-- Finds its largest frame and gives it the real edge treatment.
+function library:ReskinGui(gui, title)
+    local skin, main, best = self:Skin(), nil, 0
+    for _, c in ipairs(gui:GetChildren()) do
+        if c:IsA("GuiObject") then
+            local a = c.AbsoluteSize.X * c.AbsoluteSize.Y
+            if a > best then main, best = c, a end
+        end
+    end
+    if not main then return false end
+
+    main.BackgroundColor3 = skin.bg
+    main.BorderSizePixel  = 0
+    local c = main:FindFirstChildWhichIsA("UICorner")
+    if not c then c = Instance.new("UICorner") c.Parent = main end
+    c.CornerRadius = UDim.new(0, 15)
+
+    if not main:FindFirstChild("windowAccentStroke") then
+        local s = Instance.new("UIStroke")
+        s.Name = "windowAccentStroke"
+        s.Color, s.Transparency, s.Thickness = skin.accent, 0.54, 1
+        s.Parent = main
+    end
+    if not main:FindFirstChild("backgroundGradient") then
+        local g = Instance.new("UIGradient")
+        g.Name = "backgroundGradient"
+        g.Color = ColorSequence.new{
+            ColorSequenceKeypoint.new(0.00, Color3.fromRGB(15, 16, 23)),
+            ColorSequenceKeypoint.new(0.48, Color3.fromRGB(10, 11, 17)),
+            ColorSequenceKeypoint.new(1.00, Color3.fromRGB(8, 9, 14)),
+        }
+        g.Rotation = 112
+        g.Parent   = main
+    end
+    pcall(function() self:AddSoftGlow(main, 0.78, 26, skin.accent, 0) end)
+
+    for _, d in ipairs(main:GetDescendants()) do
+        pcall(function()
+            if d:IsA("TextLabel") or d:IsA("TextButton") or d:IsA("TextBox") then
+                if d.Font ~= Enum.Font.Code then d.Font = Enum.Font.Gotham end
+                if d:IsA("TextLabel") then d.TextColor3 = skin.text end
+            end
+        end)
+    end
+    return true, main
+end
+
 function library:Sweep(word, replacement)
     word, replacement = (word or "skyfall"):lower(), replacement or "DROIDWARE"
     local hosts = {}
