@@ -960,39 +960,65 @@ function Groupbox:NewColorPicker(text, default, callback)
     swatch.MouseEnter:Connect(function() tween(swStroke, 0.1, { Transparency = 0 }) end)
     swatch.MouseLeave:Connect(function() tween(swStroke, 0.14, { Transparency = 0.2 }) end)
 
+    local home = library._overlay
+        or row:FindFirstAncestorWhichIsA("ScreenGui")
+        or row
+
+    -- closes the panel when you click anywhere else, exactly like the
+    -- selector menu does. without this the panel never goes away and a
+    -- second picker just stacks on top of the first.
+    local backdrop = new("TextButton", {
+        Name = "colorBackdrop", Visible = false,
+        BackgroundTransparency = 1, Text = "", AutoButtonColor = false,
+        Size = UDim2.new(1, 0, 1, 0), ZIndex = 198,
+    }, home)
+
     local panel = new("Frame", {
-        Visible = false, Size = UDim2.fromOffset(176, 150),
+        Name = "colorPanel", Visible = false,
+        Size = UDim2.fromOffset(188, 176),
         BackgroundColor3 = library.surfaceColor, BorderSizePixel = 0,
         ZIndex = 200,
-    }, library._overlay or row:FindFirstAncestorWhichIsA("ScreenGui") or row)
+    }, home)
     corner(panel, 4)
     outline(panel, library.accentColor, 0.15)
 
-    local sv = new("ImageButton", {
-        Position = UDim2.fromOffset(8, 8), Size = UDim2.fromOffset(160, 92),
+    local sv = new("TextButton", {
+        Position = UDim2.fromOffset(8, 8), Size = UDim2.fromOffset(172, 96),
         BackgroundColor3 = Color3.fromHSV(select(1, col:ToHSV()), 1, 1),
-        BorderSizePixel = 0, AutoButtonColor = false, ZIndex = 201,
+        BorderSizePixel = 0, AutoButtonColor = false, Text = "", ZIndex = 201,
     }, panel)
-    corner(sv, 5)
+    corner(sv, 4)
+    local white = new("Frame", {
+        Size = UDim2.new(1, 0, 1, 0), BackgroundColor3 = Color3.new(1, 1, 1),
+        BorderSizePixel = 0, ZIndex = 202, Active = false,
+    }, sv)
+    corner(white, 4)
     new("UIGradient", {
-        Color = ColorSequence.new(Color3.new(1,1,1), Color3.new(1,1,1)),
         Transparency = NumberSequence.new{
             NumberSequenceKeypoint.new(0, 0), NumberSequenceKeypoint.new(1, 1) },
-    }, sv)
+    }, white)
     local dark = new("Frame", {
-        Size = UDim2.new(1,0,1,0), BackgroundColor3 = Color3.new(0,0,0),
-        BorderSizePixel = 0, ZIndex = 202,
+        Size = UDim2.new(1, 0, 1, 0), BackgroundColor3 = Color3.new(0, 0, 0),
+        BorderSizePixel = 0, ZIndex = 203, Active = false,
     }, sv)
-    corner(dark, 5)
+    corner(dark, 4)
     new("UIGradient", {
         Rotation = 90,
         Transparency = NumberSequence.new{
             NumberSequenceKeypoint.new(0, 1), NumberSequenceKeypoint.new(1, 0) },
     }, dark)
+    local svDot = new("Frame", {
+        AnchorPoint = Vector2.new(0.5, 0.5), Size = UDim2.fromOffset(7, 7),
+        BackgroundColor3 = Color3.new(1, 1, 1), BorderSizePixel = 0,
+        ZIndex = 205, Active = false,
+    }, sv)
+    corner(svDot, 4)
+    outline(svDot, Color3.new(0, 0, 0), 0.3)
 
-    local hueBar = new("ImageButton", {
-        Position = UDim2.fromOffset(8, 106), Size = UDim2.fromOffset(160, 14),
-        BorderSizePixel = 0, AutoButtonColor = false, ZIndex = 201,
+    local hueBar = new("TextButton", {
+        Position = UDim2.fromOffset(8, 112), Size = UDim2.fromOffset(172, 14),
+        BorderSizePixel = 0, AutoButtonColor = false, Text = "", ZIndex = 201,
+        BackgroundColor3 = Color3.new(1, 1, 1),
     }, panel)
     corner(hueBar, 4)
     new("UIGradient", {
@@ -1006,13 +1032,50 @@ function Groupbox:NewColorPicker(text, default, callback)
             ColorSequenceKeypoint.new(1.00, Color3.fromRGB(255,0,0)),
         },
     }, hueBar)
+    local hueDot = new("Frame", {
+        AnchorPoint = Vector2.new(0.5, 0.5), Size = UDim2.fromOffset(4, 18),
+        BackgroundColor3 = Color3.new(1, 1, 1), BorderSizePixel = 0,
+        ZIndex = 205, Active = false,
+    }, hueBar)
+    corner(hueDot, 2)
+    outline(hueDot, Color3.new(0, 0, 0), 0.3)
+
+    local preview = new("Frame", {
+        Position = UDim2.fromOffset(8, 134), Size = UDim2.fromOffset(44, 32),
+        BackgroundColor3 = col, BorderSizePixel = 0, ZIndex = 201,
+    }, panel)
+    corner(preview, 3)
+    outline(preview, library.strokeColor, 0.3)
+
+    local hex = new("TextBox", {
+        Position = UDim2.fromOffset(58, 134), Size = UDim2.fromOffset(122, 32),
+        BackgroundColor3 = library.inputColor, BorderSizePixel = 0,
+        Font = library.fontMed, TextSize = 12, ZIndex = 201,
+        TextColor3 = library.textColor, ClearTextOnFocus = false,
+        Text = string.format("#%02X%02X%02X",
+            math.floor(col.R * 255 + 0.5),
+            math.floor(col.G * 255 + 0.5),
+            math.floor(col.B * 255 + 0.5)),
+    }, panel)
+    corner(hex, 3)
+    outline(hex, library.strokeColor, 0.35)
 
     local h, sat, v = col:ToHSV()
     local F = {}
+
     local function apply(fire)
         col = Color3.fromHSV(h, sat, v)
         swatch.BackgroundColor3 = col
-        sv.BackgroundColor3     = Color3.fromHSV(h, 1, 1)
+        preview.BackgroundColor3 = col
+        sv.BackgroundColor3 = Color3.fromHSV(h, 1, 1)
+        svDot.Position  = UDim2.new(sat, 0, 1 - v, 0)
+        hueDot.Position = UDim2.new(h, 0, 0.5, 0)
+        if not hex:IsFocused() then
+            hex.Text = string.format("#%02X%02X%02X",
+                math.floor(col.R * 255 + 0.5),
+                math.floor(col.G * 255 + 0.5),
+                math.floor(col.B * 255 + 0.5))
+        end
         if fire and callback then pcall(callback, col) end
     end
 
@@ -1028,6 +1091,11 @@ function Groupbox:NewColorPicker(text, default, callback)
         h = math.clamp((m.X - hueBar.AbsolutePosition.X) / math.max(hueBar.AbsoluteSize.X, 1), 0, 1)
         apply(true)
     end
+
+    -- both a click and a drag must work: InputBegan alone misses the case
+    -- where the press lands and the pointer never moves.
+    sv.MouseButton1Down:Connect(function() dragSV = true pickSV() end)
+    hueBar.MouseButton1Down:Connect(function() dragHue = true pickHue() end)
     sv.InputBegan:Connect(function(i)
         if i.UserInputType == Enum.UserInputType.MouseButton1 then dragSV = true pickSV() end
     end)
@@ -1042,16 +1110,47 @@ function Groupbox:NewColorPicker(text, default, callback)
         if dragSV then pickSV() elseif dragHue then pickHue() end
     end))
 
+    hex.FocusLost:Connect(function()
+        local t = tostring(hex.Text):gsub("#", ""):gsub("%s", "")
+        if #t == 6 and tonumber(t, 16) then
+            local n = tonumber(t, 16)
+            local c = Color3.fromRGB(
+                math.floor(n / 65536) % 256,
+                math.floor(n / 256) % 256,
+                n % 256)
+            h, sat, v = c:ToHSV()
+            apply(true)
+        else
+            apply(false)
+        end
+    end)
+
+    local function close()
+        panel.Visible = false
+        backdrop.Visible = false
+        if library._openMenu == close then library._openMenu = nil end
+    end
+    backdrop.MouseButton1Click:Connect(close)
+
     swatch.MouseButton1Click:Connect(function()
-        panel.Visible = not panel.Visible
-        if not panel.Visible then return end
-        local ph    = panel.Size.Y.Offset
+        if panel.Visible then close() return end
+        -- only one floating panel at a time, same rule the selector uses
+        if library._openMenu then pcall(library._openMenu) end
+        library._openMenu = close
         local sp    = swatch.AbsolutePosition
-        local viewH = workspace.CurrentCamera
-            and workspace.CurrentCamera.ViewportSize.Y or 1080
-        local y = sp.Y + 20
-        if y + ph > viewH - 8 then y = math.max(8, sp.Y - ph - 4) end
-        panel.Position = UDim2.fromOffset(math.max(8, sp.X - 140), y)
+        local ph    = panel.AbsoluteSize.Y
+        local pw    = panel.AbsoluteSize.X
+        local cam   = workspace.CurrentCamera
+        local viewX = cam and cam.ViewportSize.X or 1920
+        local viewY = cam and cam.ViewportSize.Y or 1080
+        local hostPos = (home:IsA("Frame") and home.AbsolutePosition) or Vector2.new(0, 0)
+        local x = math.clamp(sp.X - pw + 34, 8, math.max(8, viewX - pw - 8))
+        local y = sp.Y + 22
+        if y + ph > viewY - 8 then y = math.max(8, sp.Y - ph - 6) end
+        panel.Position   = UDim2.fromOffset(x - hostPos.X, y - hostPos.Y)
+        backdrop.Visible = true
+        panel.Visible    = true
+        apply(false)
     end)
 
     function F:SetColor(c)
@@ -1064,11 +1163,11 @@ function Groupbox:NewColorPicker(text, default, callback)
     function F:GetColor() return col end
     F.GetValue = F.GetColor
     function F:Flag(name) library._flags[name] = F return F end
+    apply(false)
     self:_grow()
     return F
 end
 
--- ---------- keybind picker ----------
 function Groupbox:NewKeypicker(text, default, callback)
     local key = default
     if typeof(key) == "string" then key = Enum.KeyCode[key] end
