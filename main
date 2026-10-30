@@ -32,6 +32,7 @@ library.edgeColor     = Color3.fromRGB(28, 23, 30)
 library.surfaceColor  = Color3.fromRGB(24, 22, 27)
 library.inputColor    = Color3.fromRGB(33, 30, 36)
 library.strokeColor   = Color3.fromRGB(62, 56, 68)
+library.dropdownMaxRows = 10
 library.icon          = "https://raw.githubusercontent.com/liamster7177/ui/main/IMG_1522%202.PNG"
 library.textColor     = Color3.fromRGB(235, 235, 238)
 library.textSecondary = Color3.fromRGB(198, 198, 204)
@@ -840,11 +841,20 @@ function Groupbox:NewSelector(text, default, options, callback)
     local menuHome = library._overlay
         or row:FindFirstAncestorWhichIsA("ScreenGui")
         or row
-    local menu = new("Frame", {
+    local menu = new("ScrollingFrame", {
         Name = "selectorMenu", Visible = false,
         BackgroundColor3 = library.surfaceColor,
         BorderSizePixel = 0, ZIndex = 200,
         ClipsDescendants = true,
+        Active = true,
+        ScrollingDirection = Enum.ScrollingDirection.Y,
+        ScrollBarThickness = 3,
+        ScrollBarImageColor3 = library.accentColor,
+        ScrollBarImageTransparency = 0.25,
+        CanvasSize = UDim2.new(),
+        AutomaticCanvasSize = Enum.AutomaticSize.Y,
+        VerticalScrollBarInset = Enum.ScrollBarInset.ScrollBar,
+        ElasticBehavior = Enum.ElasticBehavior.Never,
     }, menuHome)
     corner(menu, 3)
     outline(menu, library.accentColor, 0.15)
@@ -886,7 +896,14 @@ function Groupbox:NewSelector(text, default, options, callback)
                 if callback then pcall(callback, opt) end
             end)
         end
-        menu.Size = UDim2.fromOffset(math.max(box.AbsoluteSize.X, 90), math.min(#options, 8) * 20 + 6)
+        local rows    = #options
+        local maxRows  = tonumber(library.dropdownMaxRows) or 10
+        local shown    = math.min(rows, maxRows)
+        if shown < 1 then shown = 1 end
+        menu.CanvasPosition = Vector2.new(0, 0)
+        menu.Size = UDim2.fromOffset(
+            math.max(box.AbsoluteSize.X, 90),
+            shown * 20 + 6)
     end
 
     box.MouseButton1Click:Connect(function()
@@ -933,8 +950,27 @@ function Groupbox:NewSelector(text, default, options, callback)
     F.SetValue, F.Set, F.Select = F.SetOption, F.SetOption, F.SetOption
     function F:GetOption() return current end
     F.GetValue = F.GetOption
-    function F:AddOption(v) options[#options + 1] = v return F end
-    function F:SetOptions(t) options = t or {} return F end
+    function F:AddOption(v)
+        options[#options + 1] = v
+        if menu.Visible then rebuild() end
+        return F
+    end
+    function F:SetOptions(t)
+        options = t or {}
+        if current ~= nil then
+            local still = false
+            for _, o in ipairs(options) do
+                if o == current then still = true break end
+            end
+            if not still then
+                current = options[1]
+                box.Text = "  " .. tostring(current or "")
+            end
+        end
+        if menu.Visible then rebuild() end
+        return F
+    end
+    F.SetValues = F.SetOptions
     function F:Text(t) label.Text = tostring(t) return F end
     function F:Flag(name) library._flags[name] = F return F end
     library:OnTheme(function() bStroke.Color = library.strokeColor end)
@@ -1180,6 +1216,8 @@ function Groupbox:NewKeypicker(text, default, callback)
         return "None"
     end
 
+    local listening = false
+
     local btn = new("TextButton", {
         AnchorPoint = Vector2.new(1, 0.5),
         Position = UDim2.new(1, 0, 0.5, 0),
@@ -1199,7 +1237,6 @@ function Groupbox:NewKeypicker(text, default, callback)
         if not listening then tween(bs, 0.14, { Transparency = 0.3 }) end
     end)
 
-    local listening = false
     local F = {}
     function F:SetKey(k)
         if typeof(k) == "string" then k = Enum.KeyCode[k] end
