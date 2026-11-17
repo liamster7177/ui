@@ -37,6 +37,137 @@ library.icon          = "https://raw.githubusercontent.com/liamster7177/ui/main/
 library.textColor     = Color3.fromRGB(235, 235, 238)
 library.textSecondary = Color3.fromRGB(198, 198, 204)
 library.textMuted     = Color3.fromRGB(128, 128, 136)
+
+-- ---------------------------------------------------------------------------
+-- Themes and gradient styles.
+--
+-- Every surface colour below is derived from the theme rather than written as
+-- a literal, so a new accent repaints the whole window coherently instead of
+-- sitting on a background tinted for the old one.
+-- ---------------------------------------------------------------------------
+library.themes = {
+    Crimson = { accent = Color3.fromRGB(222,  38,  48), bg = Color3.fromRGB(13, 12, 15) },
+    Ember   = { accent = Color3.fromRGB(240, 118,  34), bg = Color3.fromRGB(16, 13, 11) },
+    Amber   = { accent = Color3.fromRGB(240, 186,  54), bg = Color3.fromRGB(16, 15, 11) },
+    Mint    = { accent = Color3.fromRGB( 52, 219, 150), bg = Color3.fromRGB(10, 15, 14) },
+    Ice     = { accent = Color3.fromRGB( 86, 180, 255), bg = Color3.fromRGB(10, 13, 17) },
+    Cobalt  = { accent = Color3.fromRGB( 64, 110, 255), bg = Color3.fromRGB(10, 12, 18) },
+    Violet  = { accent = Color3.fromRGB(150,  92, 255), bg = Color3.fromRGB(13, 11, 18) },
+    Magenta = { accent = Color3.fromRGB(236,  64, 170), bg = Color3.fromRGB(16, 11, 15) },
+    Noir    = { accent = Color3.fromRGB(200, 200, 208), bg = Color3.fromRGB(11, 11, 12) },
+}
+library.themeOrder = { "Crimson","Ember","Amber","Mint","Ice","Cobalt","Violet","Magenta","Noir" }
+
+-- how much contrast the surface gradients carry
+library.gradientStyles = { "Flat", "Sheen", "Deep", "Glass", "Aurora" }
+library.gradientStyle  = "Deep"
+library.gradientAngle  = 34
+library.accentPulse    = false
+
+local STYLE_DEPTH = { Flat = 0.00, Sheen = 0.45, Deep = 1.00, Glass = 0.65, Aurora = 1.25 }
+
+local function shade(c, t)   return c:Lerp(Color3.new(0, 0, 0), t) end
+local function tint(c, t)    return c:Lerp(Color3.new(1, 1, 1), t) end
+
+-- Mix the accent into the base so mid-tones belong to the palette. Without
+-- this the background keeps whatever hue it was authored with.
+local function blend(base, accent, amount)
+    return base:Lerp(accent, amount)
+end
+
+function library:StyleDepth()
+    return STYLE_DEPTH[self.gradientStyle] or 1
+end
+
+-- The window body: accent-lit in one corner, falling to near-black. Built
+-- from the live accent and bg so it is correct for every theme.
+function library:BackgroundSequence()
+    local a, b = self.accentColor, self.bgColor
+    local d = self:StyleDepth()
+    if d <= 0 then
+        return ColorSequence.new(b)
+    end
+    return ColorSequence.new{
+        ColorSequenceKeypoint.new(0.00, blend(shade(a, 0.52), b, 1 - 0.55 * d)),
+        ColorSequenceKeypoint.new(0.22, blend(shade(a, 0.72), b, 1 - 0.40 * d)),
+        ColorSequenceKeypoint.new(0.52, blend(b, a, 0.10 * d)),
+        ColorSequenceKeypoint.new(0.78, shade(b, 0.25 * d)),
+        ColorSequenceKeypoint.new(1.00, shade(b, 0.55 * d)),
+    }
+end
+
+-- A panel sheen, derived the same way, so groupboxes sit in the same light.
+function library:SurfaceSequence(base)
+    base = base or self.surfaceColor
+    local d = self:StyleDepth()
+    if d <= 0 then return ColorSequence.new(base) end
+    local lift = self.gradientStyle == "Glass" and 0.16 or 0.08
+    return ColorSequence.new{
+        ColorSequenceKeypoint.new(0.00, tint(base, lift * d)),
+        ColorSequenceKeypoint.new(0.52, base),
+        ColorSequenceKeypoint.new(1.00, shade(base, 0.22 * d)),
+    }
+end
+
+function library:SetTheme(name)
+    local th = self.themes[name]
+    if not th then return self end
+    self.themeName   = name
+    self.bgColor     = th.bg
+    self.edgeColor   = tint(th.bg, 0.10)
+    self.surfaceColor= tint(th.bg, 0.07)
+    self.inputColor  = tint(th.bg, 0.12)
+    self.strokeColor = blend(tint(th.bg, 0.26), th.accent, 0.18)
+    self:SetAccentColor(th.accent)
+    return self
+end
+
+function library:SetGradientStyle(style)
+    for _, s in ipairs(self.gradientStyles) do
+        if s == style then
+            self.gradientStyle = style
+            self:ApplyTheme()
+            return self
+        end
+    end
+    return self
+end
+
+function library:SetGradientAngle(deg)
+    self.gradientAngle = tonumber(deg) or 34
+    self:ApplyTheme()
+    return self
+end
+
+-- One connection, opt-in: drifts every registered gradient's offset so the
+-- accent light moves. Registering is what keeps this to a single loop rather
+-- than a tween per element.
+library._drift = setmetatable({}, { __mode = "k" })
+function library:RegisterDrift(grad, scale)
+    if typeof(grad) == "Instance" then self._drift[grad] = scale or 1 end
+    return grad
+end
+function library:SetAccentPulse(on)
+    self.accentPulse = on and true or false
+    if self.accentPulse and not self._pulseConn then
+        self._pulseConn = RUN.RenderStepped:Connect(function()
+            if not self.accentPulse then return end
+            local t = tick()
+            for g, sc in pairs(self._drift) do
+                if g.Parent then
+                    g.Offset = Vector2.new(math.sin(t * 0.6 * sc) * 0.12, 0)
+                else
+                    self._drift[g] = nil
+                end
+            end
+        end)
+    elseif not self.accentPulse and self._pulseConn then
+        self._pulseConn:Disconnect()
+        self._pulseConn = nil
+    end
+    return self
+end
+
 library.title         = "DROIDWARE"
 library.version       = ""
 local function pickFont(names, fallback)
@@ -149,14 +280,28 @@ local function lerpColor(a, b, t) return a:Lerp(b, t) end
 -- A vertical sheen. Every surface gets one, which is what stops a
 -- flat fill reading as unfinished.
 local function sheen(o, top, mid, bot, rotation)
-    return new("UIGradient", {
+    -- pull the end stops toward the middle by the active style depth, so
+    -- Flat reads as a single fill and Aurora exaggerates the falloff --
+    -- every existing caller gets this without changing its arguments
+    local d = library:StyleDepth()
+    local g = new("UIGradient", {
         Rotation = rotation or 112,
         Color = ColorSequence.new{
-            ColorSequenceKeypoint.new(0.00, top),
+            ColorSequenceKeypoint.new(0.00, mid:Lerp(top, d)),
             ColorSequenceKeypoint.new(0.52, mid),
-            ColorSequenceKeypoint.new(1.00, bot),
+            ColorSequenceKeypoint.new(1.00, mid:Lerp(bot, d)),
         },
     }, o)
+    library:OnTheme(function()
+        if not g.Parent then return end
+        local dd = library:StyleDepth()
+        g.Color = ColorSequence.new{
+            ColorSequenceKeypoint.new(0.00, mid:Lerp(top, dd)),
+            ColorSequenceKeypoint.new(0.52, mid),
+            ColorSequenceKeypoint.new(1.00, mid:Lerp(bot, dd)),
+        }
+    end)
+    return g
 end
 
 -- A soft accent bloom built from a gradient rather than a sliced PNG,
@@ -441,16 +586,11 @@ function library:BuildFrame(parent, w, h)
     -- A real diagonal: deep red in the top-left corner driving down to
     -- black in the bottom-right. One gradient does the work, so the
     -- contrast is actually visible instead of two washes cancelling out.
-    local bgGrad = new("UIGradient", { Name = "bgGradient", Rotation = 34 }, bg)
+    local bgGrad = new("UIGradient", { Name = "bgGradient", Rotation = self.gradientAngle }, bg)
+    self:RegisterDrift(bgGrad, 1)
     local function paintBg()
-        local a = self.accentColor
-        bgGrad.Color = ColorSequence.new{
-            ColorSequenceKeypoint.new(0.00, a:Lerp(Color3.new(0, 0, 0), 0.60)),
-            ColorSequenceKeypoint.new(0.22, a:Lerp(Color3.new(0, 0, 0), 0.78)),
-            ColorSequenceKeypoint.new(0.52, Color3.fromRGB(22, 11, 13)),
-            ColorSequenceKeypoint.new(0.78, Color3.fromRGB(12, 9, 10)),
-            ColorSequenceKeypoint.new(1.00, Color3.fromRGB(6, 6, 7)),
-        }
+        bgGrad.Color    = self:BackgroundSequence()
+        bgGrad.Rotation = self.gradientAngle
     end
     paintBg()
     self:OnTheme(paintBg)
